@@ -320,18 +320,18 @@ final class LiveSync: ObservableObject {
         save()
     }
 
-    static func decode(_ payload: String) -> LiveManifest? {
+    nonisolated static func decode(_ payload: String) -> LiveManifest? {
         guard let d = payload.data(using: .utf8), var m = try? JSONDecoder().decode(LiveManifest.self, from: d) else { return nil }
         m.config = m.config?.sanitized()
         m.plugins = m.plugins.map { Array($0.prefix(200)) }; m.recipes = m.recipes.map { Array($0.prefix(200)) }; m.history = m.history.map { Array($0.prefix(30)) }
         return m
     }
-    static func date(iso: String) -> Date? {
+    nonisolated static func date(iso: String) -> Date? {
         let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f.date(from: iso) ?? ISO8601DateFormatter().date(from: iso)
     }
 
-    static func color(hex: String) -> Color? {
+    nonisolated static func color(hex: String) -> Color? {
         var h = hex.trimmingCharacters(in: .whitespaces); if h.hasPrefix("#") { h.removeFirst() }
         guard h.count == 6, let v = UInt32(h, radix: 16) else { return nil }
         return Color(red: Double((v >> 16) & 255) / 255, green: Double((v >> 8) & 255) / 255, blue: Double(v & 255) / 255)
