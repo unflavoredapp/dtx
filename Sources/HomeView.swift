@@ -201,9 +201,9 @@ struct HomeView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("TEAM").font(.caption2.weight(.semibold)).tracking(2).foregroundStyle(.secondary)
                 HStack(alignment: .top, spacing: 8) {
-                    member("MRZEFA", "Developer")
-                    member("Oxcffaedfe", "Developer")
-                    member("DELvEK", "Repository")
+                    member("ᴍƦᴢᴇꜰΛ", "Developer", image: "TeamMrzefa")
+                    member("Oxcffaedfe", "Developer", image: "TeamOxcffaedfe")
+                    member("DELvEK", "Repository", gif: "delvek")
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -211,11 +211,19 @@ struct HomeView: View {
         .padding(.top, 6)
     }
 
-    private func member(_ name: String, _ role: String) -> some View {
+    private func member(_ name: String, _ role: String, image: String? = nil, gif: String? = nil) -> some View {
         VStack(spacing: 4) {
-            Text(String(name.prefix(1)))
-                .font(.system(size: 22, weight: .heavy)).foregroundStyle(.black)
-                .frame(width: 52, height: 52).background(RoundedRectangle(cornerRadius: 13, style: .continuous).fill(Color.dtAccent))
+            Group {
+                if let gif { AnimatedGIF(name: gif) }
+                else if let image { Image(image).resizable().scaledToFill() }
+                else {
+                    Text(String(name.prefix(1))).font(.system(size: 22, weight: .heavy)).foregroundStyle(.black)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.dtAccent)
+                }
+            }
+            .frame(width: 52, height: 52)
+            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(Color.white.opacity(0.12)))
             Text(name).font(.footnote.weight(.bold)).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7)
             Text(role).font(.caption2).foregroundStyle(.secondary)
         }
