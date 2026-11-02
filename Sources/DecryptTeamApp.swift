@@ -32,7 +32,9 @@ struct RootView: View {
                 mainTabs
             }
         }
-        .task { await store.refresh(); await session.refresh() }
+        .task { await session.refresh() }
+        // the repos are only fetched once you are in, so signing in never waits behind a big download
+        .task(id: session.allowed) { if session.allowed { await store.refresh() } }
         .animation(.easeInOut(duration: 0.25), value: session.allowed)
         .onChange(of: scenePhase) { phase in if phase == .active { session.nudge() } }
     }

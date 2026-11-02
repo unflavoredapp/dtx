@@ -22,9 +22,9 @@ final class Api {
         (UserDefaults.standard.string(forKey: "dt.server") ?? "https://decrypt.team").trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
     }
 
-    func request(_ method: String, _ path: String, json: Any? = nil) async throws -> Data {
+    func request(_ method: String, _ path: String, json: Any? = nil, timeout: TimeInterval = 30) async throws -> Data {
         guard let u = URL(string: base + path), u.scheme == "https" else { throw ApiError.bad }
-        var r = URLRequest(url: u, timeoutInterval: 30)
+        var r = URLRequest(url: u, timeoutInterval: timeout)
         r.httpMethod = method
         r.setValue("1", forHTTPHeaderField: "x-dt")
         r.setValue(base, forHTTPHeaderField: "Origin")
@@ -41,8 +41,8 @@ final class Api {
         return data
     }
 
-    func get<T: Decodable>(_ path: String) async throws -> T {
-        try JSONDecoder().decode(T.self, from: try await request("GET", path))
+    func get<T: Decodable>(_ path: String, timeout: TimeInterval = 30) async throws -> T {
+        try JSONDecoder().decode(T.self, from: try await request("GET", path, timeout: timeout))
     }
 
     func post<T: Decodable>(_ path: String, json: Any? = nil) async throws -> T {
@@ -78,11 +78,35 @@ final class Session: ObservableObject {
     private var loginTask: Task<Void, Never>?
     private var nudged = false
 
+    /// The last answer from the server is remembered, so opening the app goes straight to the right screen
+    /// and the check below only confirms it in the background.
+    init() {
+        let d = UserDefaults.standard
+        if let name = d.string(forKey: "dt.me.name") {
+            username = name
+            beta = d.bool(forKey: "dt.me.beta")
+            staff = d.bool(forKey: "dt.me.staff")
+            checked = true
+        }
+    }
+
+    private func remember() {
+        let d = UserDefaults.standard
+        if let username { d.set(username, forKey: "dt.me.name"); d.set(beta, forKey: "dt.me.beta"); d.set(staff, forKey: "dt.me.staff") }
+        else { for k in ["dt.me.name", "dt.me.beta", "dt.me.staff"] { d.removeObject(forKey: k) } }
+    }
+
     func refresh() async {
-        let me: MeReply? = try? await Api.shared.get("/api/auth/me")
-        username = me?.user?.username
-        beta = me?.user?.beta ?? false
-        staff = me?.user?.staff ?? false
+        do {
+            let me: MeReply = try await Api.shared.get("/api/auth/me", timeout: 8)
+            username = me.user?.username
+            beta = me.user?.beta ?? false
+            staff = me.user?.staff ?? false
+            remember()
+        } catch {
+            // no answer (offline, slow server): keep what we remembered; a stranger just sees the onboarding screen
+            if case ApiError.server(_, let code) = error, code == 401 { username = nil; beta = false; staff = false; remember() }
+        }
         checked = true
     }
 
@@ -131,7 +155,8 @@ final class Session: ObservableObject {
     func signOut() async {
         _ = try? await Api.shared.request("POST", "/api/auth/logout", json: [String: Any]())
         for c in HTTPCookieStorage.shared.cookies ?? [] { HTTPCookieStorage.shared.deleteCookie(c) }
-        username = nil; beta = false; phase = .idle
+        username = nil; beta = false; staff = false; phase = .idle
+        remember()
     }
 }
 
