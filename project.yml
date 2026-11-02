@@ -27,7 +27,7 @@ targets:
     info:
       path: Sources/Info.plist
       properties:
-        CFBundleDisplayName: Decrypt.team
+        CFBundleDisplayName: 0xDEC7977EA1
         UILaunchScreen:
           UIColorName: LaunchBackground
           UIImageRespectsSafeAreaInsets: true
