@@ -31,8 +31,10 @@ struct TopBar: View {
                     .accessibilityLabel("Appearance and settings")
                 Spacer(minLength: 0)
                 HStack(spacing: 8) {
-                    Image("Logo").resizable().frame(width: 30, height: 30)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    if tab == .home {
+                        Image("Logo").resizable().frame(width: 30, height: 30)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
                     Group {
                         if let title { Text(title).foregroundColor(.white) }
                         else { Text("Decrypt.").foregroundColor(.white) + Text("Team").foregroundColor(.dtAccent) }
@@ -64,18 +66,16 @@ struct TopBar: View {
                             .frame(width: 34, height: 34).background(Circle().fill(Color.dtAccent))
                         VStack(alignment: .leading, spacing: 0) {
                             Text(session.username ?? "Account").font(.system(size: 13, weight: .bold, design: .monospaced))
-                                .foregroundStyle(Color.dtYellow).lineLimit(1).frame(maxWidth: 130, alignment: .leading)
+                                .foregroundStyle(Color.dtYellow).lineLimit(1).frame(maxWidth: 110, alignment: .leading)
                             Text(session.staff ? "STAFF" : "BETA").font(.system(size: 10, weight: .heavy, design: .monospaced)).foregroundStyle(Color.dtAccent)
                         }
                         Image(systemName: "chevron.down").font(.system(size: 14, weight: .bold)).foregroundStyle(.white)
                     }
                     .padding(.leading, 6).padding(.trailing, 12).padding(.vertical, 5)
-                    .background(Capsule().fill(Color.white.opacity(0.07)))
+                    .background(Capsule().fill(Color.black.opacity(0.4)))
                 }
             }
-            .padding(.horizontal, 8).padding(.vertical, 6)
-            .frame(maxWidth: .infinity)
-            .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color.black.opacity(0.35)))
+            .padding(.horizontal, 2)
 
             if open {
                 HStack(spacing: 10) {

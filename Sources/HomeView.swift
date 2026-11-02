@@ -16,13 +16,11 @@ struct HomeView: View {
                     tools
                     if store.onlyDefault { repoNotice }
                     statsRow
-                    HStack(alignment: .top, spacing: 12) {
-                        changelogCard
-                        activityCard
-                    }
+                    changelogCard
+                    activityCard
                     footer
                 }
-                .padding(.horizontal, 14).padding(.bottom, 24)
+                .padding(.horizontal, 14).padding(.bottom, 120)
             }
             .background(AppBackground())
             .withTopBar(.home)
@@ -187,11 +185,40 @@ struct HomeView: View {
     }
 
     private var footer: some View {
-        VStack(spacing: 4) {
-            Text("BUILT BY").font(.caption2.weight(.semibold)).tracking(2).foregroundStyle(.secondary)
-            (Text("The ").foregroundColor(.white) + Text("Decrypt.team").foregroundColor(.dtAccent) + Text(" Team").foregroundColor(.white)).font(.subheadline.bold())
+        VStack(spacing: 14) {
+            Divider().overlay(Color.white.opacity(0.12))
+            HStack(alignment: .center, spacing: 12) {
+                Image("Logo").resizable().frame(width: 52, height: 52).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("BUILT BY").font(.caption2.weight(.semibold)).tracking(2).foregroundStyle(.secondary)
+                    (Text("The ").foregroundColor(.white) + Text("Decrypt.team").foregroundColor(.dtAccent)).font(.subheadline.bold())
+                    Text("Special thanks to everyone who helps make this possible.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            Divider().overlay(Color.white.opacity(0.12))
+            VStack(alignment: .leading, spacing: 10) {
+                Text("TEAM").font(.caption2.weight(.semibold)).tracking(2).foregroundStyle(.secondary)
+                HStack(alignment: .top, spacing: 8) {
+                    member("MRZEFA", "Developer")
+                    member("Oxcffaedfe", "Developer")
+                    member("DELvEK", "Repository")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.top, 4)
+        .padding(.top, 6)
+    }
+
+    private func member(_ name: String, _ role: String) -> some View {
+        VStack(spacing: 4) {
+            Text(String(name.prefix(1)))
+                .font(.system(size: 22, weight: .heavy)).foregroundStyle(.black)
+                .frame(width: 52, height: 52).background(RoundedRectangle(cornerRadius: 13, style: .continuous).fill(Color.dtAccent))
+            Text(name).font(.footnote.weight(.bold)).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7)
+            Text(role).font(.caption2).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
     }
 
     private func load() async {
