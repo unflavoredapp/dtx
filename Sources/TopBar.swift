@@ -12,17 +12,7 @@ struct TopBar: View {
 
     private var open: Bool { store.searchOpen && store.tab == tab }
 
-    var body: some View {
-        VStack(spacing: 8) {
-            bar
-            HStack(spacing: 6) {
-                Image(systemName: "infinity").font(.system(size: 13, weight: .semibold))
-                Text("Unlimited").fontWeight(.bold)
-                Text("· decrypt, inject and build").foregroundStyle(.secondary)
-            }
-            .font(.system(size: 14)).foregroundStyle(.white.opacity(0.85))
-        }
-    }
+    var body: some View { bar }
 
     private var bar: some View {
         VStack(spacing: 8) {
@@ -72,10 +62,11 @@ struct TopBar: View {
                         Image(systemName: "chevron.down").font(.system(size: 14, weight: .bold)).foregroundStyle(.white)
                     }
                     .padding(.leading, 6).padding(.trailing, 12).padding(.vertical, 5)
-                    .background(Capsule().fill(Color.black.opacity(0.4)))
                 }
             }
-            .padding(.horizontal, 2)
+            .padding(.horizontal, 8).padding(.vertical, 6)
+            .frame(maxWidth: .infinity)
+            .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color.black.opacity(0.35)))
 
             if open {
                 HStack(spacing: 10) {

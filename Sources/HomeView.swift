@@ -105,10 +105,11 @@ struct HomeView: View {
         VStack(alignment: .leading, spacing: 4) {
             Image(systemName: icon).foregroundStyle(Color.dtAccent)
             Text(n.map { formatCount($0) } ?? "–").font(.title3.weight(.bold)).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7)
-            Text(label).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(2)
+            Text(label).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(2).minimumScaleFactor(0.8)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
+        .padding(9)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .aspectRatio(1, contentMode: .fit)
         .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.white.opacity(0.065)))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.white.opacity(0.1)))
     }
