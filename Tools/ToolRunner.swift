@@ -11,6 +11,7 @@ final class ToolRunner: ObservableObject {
         var failed = false
         var message = ""
         var sections: [PluginSection] = []
+        var at = Date()
     }
 
     @Published private(set) var states: [String: State] = [:]
@@ -21,7 +22,7 @@ final class ToolRunner: ObservableObject {
 
     /// Option values to use when the person hasn't touched anything.
     static func defaults(_ t: Tool) -> [String: String] {
-        Dictionary(uniqueKeysWithValues: t.options.map { ($0.key, $0.def) })
+        Dictionary(uniqueKeysWithValues: t.options.map { ($0.key, ToolPrefs.option(t, $0.key) ?? $0.def) })
     }
 
     func start(_ t: Tool, url: String, options: [String: String]? = nil) {
@@ -55,10 +56,28 @@ final class ToolRunner: ObservableObject {
 /// Which tools run by themselves and which are switched on. Starts from each tool's own default and from the live configuration; the person can change both.
 @MainActor
 enum ToolPrefs {
-    static func auto(_ t: Tool) -> Bool {
-        UserDefaults.standard.object(forKey: "dt.tool.auto." + t.id) as? Bool ?? LiveSync.shared.config.auto?[t.id] ?? t.auto
+    /// One switch that stops every tool from starting by itself (they can still be run by hand).
+    static var autoPaused: Bool {
+        get { UserDefaults.standard.bool(forKey: "dt.tool.autopause") }
+        set { UserDefaults.standard.set(newValue, forKey: "dt.tool.autopause") }
     }
+
+    /// What the person chose, else the live release's default, else the tool's own. A live release can never switch on a tool that runs on the server: that needs the person's own OK.
+    static func auto(_ t: Tool) -> Bool {
+        if let own = UserDefaults.standard.object(forKey: "dt.tool.auto." + t.id) as? Bool { return own }
+        if t.origin == .server { return false }
+        return LiveSync.shared.config.auto?[t.id] ?? t.auto
+    }
+    /// Whether it will actually start by itself right now.
+    static func runsByItself(_ t: Tool) -> Bool { !autoPaused && enabled(t) && auto(t) }
     static func setAuto(_ t: Tool, _ on: Bool) { UserDefaults.standard.set(on, forKey: "dt.tool.auto." + t.id) }
+
+    static func needsAutoConsent(_ t: Tool) -> Bool { t.origin == .server && !UserDefaults.standard.bool(forKey: "dt.tool.consent." + t.id) }
+    static func giveAutoConsent(_ t: Tool) { UserDefaults.standard.set(true, forKey: "dt.tool.consent." + t.id) }
+
+    /// The person's own default for one option, used when the tool runs by itself or when its screen opens.
+    static func option(_ t: Tool, _ key: String) -> String? { UserDefaults.standard.string(forKey: "dt.tool.opt.\(t.id).\(key)") }
+    static func setOption(_ t: Tool, _ key: String, _ value: String?) { UserDefaults.standard.set(value, forKey: "dt.tool.opt.\(t.id).\(key)") }
 
     /// Off when the person switched it off, or when a live release hides it and they haven't switched it on themselves.
     static func enabled(_ t: Tool) -> Bool {
@@ -67,10 +86,12 @@ enum ToolPrefs {
     }
     static func setEnabled(_ t: Tool, _ on: Bool) { UserDefaults.standard.set(on, forKey: "dt.tool.on." + t.id) }
     static func hasOwnChoice(_ t: Tool) -> Bool {
-        UserDefaults.standard.object(forKey: "dt.tool.on." + t.id) != nil || UserDefaults.standard.object(forKey: "dt.tool.auto." + t.id) != nil
+        UserDefaults.standard.object(forKey: "dt.tool.on." + t.id) != nil || UserDefaults.standard.object(forKey: "dt.tool.auto." + t.id) != nil || t.options.contains { option(t, $0.key) != nil }
     }
     static func reset(_ t: Tool) {
         UserDefaults.standard.removeObject(forKey: "dt.tool.on." + t.id); UserDefaults.standard.removeObject(forKey: "dt.tool.auto." + t.id)
+        UserDefaults.standard.removeObject(forKey: "dt.tool.consent." + t.id)
+        for o in t.options { UserDefaults.standard.removeObject(forKey: "dt.tool.opt.\(t.id).\(o.key)") }
     }
 
     /// Only the tools that are switched on, in the order a live release asks for (the rest keep their own order after those).

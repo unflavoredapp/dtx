@@ -68,7 +68,7 @@ struct ToolsPanel: View {
 
     /// Starts every tool the person left on Auto, once per link.
     private func autoRun(_ tools: [Tool]) {
-        for t in tools where ToolPrefs.auto(t) {
+        for t in tools where ToolPrefs.runsByItself(t) {
             let s = runner.state(t, url)
             if !s.running && !s.done { runner.start(t, url: url) }
         }
@@ -112,10 +112,10 @@ struct ToolRow: View {
             }
             .buttonStyle(.plain)
             VStack(spacing: 2) {
-                Toggle("", isOn: $auto).labelsHidden().tint(.dtAccent).scaleEffect(0.8)
+                AutoRunToggle(tool: tool, label: "", isOn: $auto, compact: true)
                     .onChange(of: auto) { on in
                         ToolPrefs.setAuto(tool, on)
-                        if on, tool.origin != .server || session.signedIn, !s.running, !s.done { runner.start(tool, url: url) }
+                        if on, !ToolPrefs.autoPaused, tool.origin != .server || session.signedIn, !s.running, !s.done { runner.start(tool, url: url) }
                     }
                 Text("AUTO").font(.system(size: 8, weight: .bold)).tracking(1).foregroundStyle(.secondary)
             }
@@ -152,13 +152,13 @@ struct ToolDetailView: View {
                         }
                     }
                     VStack(alignment: .leading, spacing: 10) {
-                        Toggle("Run automatically when I open an app", isOn: $auto).font(.subheadline).tint(.dtAccent)
-                            .onChange(of: auto) { ToolPrefs.setAuto(tool, $0) }
+                        AutoRunToggle(tool: tool, label: "Run automatically when I open an app", isOn: $auto)
+                            .font(.subheadline).onChange(of: auto) { ToolPrefs.setAuto(tool, $0) }
                         ForEach(tool.options) { o in
                             if o.type == "bool" {
-                                Toggle(o.label, isOn: Binding(get: { flags[o.key] ?? (o.def == "true") }, set: { flags[o.key] = $0 })).font(.subheadline).tint(.dtAccent)
+                                Toggle(o.label, isOn: Binding(get: { flags[o.key] ?? ((ToolPrefs.option(tool, o.key) ?? o.def) == "true") }, set: { flags[o.key] = $0 })).font(.subheadline).tint(.dtAccent)
                             } else {
-                                TextField(o.label, text: Binding(get: { values[o.key] ?? o.def }, set: { values[o.key] = $0 }))
+                                TextField(o.label, text: Binding(get: { values[o.key] ?? ToolPrefs.option(tool, o.key) ?? o.def }, set: { values[o.key] = $0 }))
                                     .textFieldStyle(.roundedBorder).textInputAutocapitalization(.never).autocorrectionDisabled()
                                     .keyboardType(o.type == "number" ? .numberPad : .default)
                             }
@@ -190,7 +190,30 @@ struct ToolDetailView: View {
 
     private func run() {
         var opts: [String: String] = [:]
-        for o in tool.options { opts[o.key] = o.type == "bool" ? ((flags[o.key] ?? (o.def == "true")) ? "true" : "false") : (values[o.key] ?? o.def) }
+        for o in tool.options { opts[o.key] = o.type == "bool" ? ((flags[o.key] ?? ((ToolPrefs.option(tool, o.key) ?? o.def) == "true")) ? "true" : "false") : (values[o.key] ?? ToolPrefs.option(tool, o.key) ?? o.def) }
         runner.start(tool, url: url, options: opts)
+    }
+}
+
+
+/// The "run automatically" switch. For a tool that runs on your server, the first time it is switched on the person has to say yes to it.
+struct AutoRunToggle: View {
+    let tool: Tool
+    let label: String
+    @Binding var isOn: Bool
+    var compact = false
+    @State private var asking = false
+
+    var body: some View {
+        let binding = Binding<Bool>(get: { isOn }, set: { want in
+            if want && ToolPrefs.needsAutoConsent(tool) { asking = true } else { isOn = want }
+        })
+        Group {
+            if compact { Toggle("", isOn: binding).labelsHidden().tint(.dtAccent).scaleEffect(0.8) }
+            else { Toggle(label, isOn: binding).tint(.dtAccent) }
+        }
+        .confirmationDialog("Let \(tool.name) start by itself?", isPresented: $asking, titleVisibility: .visible) {
+            Button("Allow it to start by itself") { ToolPrefs.giveAutoConsent(tool); isOn = true }
+        } message: { Text("It runs on the Decrypt.Team server each time you open an app, and counts against your tool limit. You can switch it off here at any time, or pause all auto-run in Settings > Plugins.") }
     }
 }

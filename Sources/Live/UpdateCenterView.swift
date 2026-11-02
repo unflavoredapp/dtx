@@ -14,7 +14,7 @@ struct UpdateCenterView: View {
         NavigationStack {
             List {
                 runtimeSection
-                if case .changed(let key) = live.keyState { keyAlert(key) }
+                switch live.keyState { case .changed(let k): keyAlert(k, first: false); case .unenrolled(let k): keyAlert(k, first: true); default: EmptyView() }
                 layersSection
                 if let exps = live.config.experimental, !exps.isEmpty { experimentsSection(exps) }
                 historySection
@@ -59,12 +59,12 @@ struct UpdateCenterView: View {
         .listRowBackground(Color.white.opacity(0.06))
     }
 
-    private func keyAlert(_ key: String) -> some View {
+    private func keyAlert(_ key: String, first: Bool) -> some View {
         Section {
-            Label("The server is signing with a different key", systemImage: "key.fill").foregroundStyle(Color.dtYellow).font(.subheadline.bold())
-            Text("New key: \(live.fingerprint(ofNew: key))\nThe one this app trusts: \(live.pinnedKeyFingerprint ?? "none")").font(.system(.footnote, design: .monospaced))
-            Text("Only trust it if you changed the server's key yourself.").font(.footnote).foregroundStyle(.secondary)
-            Button("Trust the new key") { live.trustNewKey() }.foregroundStyle(Color.dtAccent)
+            Label(first ? "Confirm the server's signing key" : "The server is signing with a different key", systemImage: "key.fill").foregroundStyle(Color.dtYellow).font(.subheadline.bold())
+            Text("Server key:  \(live.fingerprint(ofNew: key))" + (first ? "" : "\nTrusted now:  \(live.pinnedKeyFingerprint ?? "none")")).font(.system(.footnote, design: .monospaced))
+            Text(first ? "Compare this with the fingerprint printed by `node live-admin.js status` on your server. Only trust it if they match exactly. Nothing is applied until you do." : "Only trust it if you changed the server's key yourself.").font(.footnote).foregroundStyle(.secondary)
+            Button(first ? "They match: trust this key" : "Trust the new key") { live.trustPendingKey() }.foregroundStyle(Color.dtAccent)
         }.listRowBackground(Color.white.opacity(0.06))
     }
 
@@ -75,6 +75,13 @@ struct UpdateCenterView: View {
             Button { showPlugins = true } label: {
                 HStack { layer("puzzlepiece.extension.fill", "2 · Plugins", "\(catalog.bundled.count) in the app · \(catalog.recipes.count) recipes · \(catalog.server.count) on the server"); Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
             }.buttonStyle(.plain)
+            let drift = live.reconcile(server: catalog.server, recipes: catalog.recipes)
+            if !drift.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    Label("Out of step (\(drift.count))", systemImage: "exclamationmark.triangle.fill").font(.footnote.bold()).foregroundStyle(Color.dtYellow)
+                    ForEach(drift, id: \.self) { Text($0).font(.caption).foregroundStyle(.secondary) }
+                }
+            }
             layer("app.badge.fill", "3 · Native app", nativeLine)
             if live.nativeNewer, let s = live.native?.url, let u = URL(string: s), u.scheme == "https" { Link("Get build \(live.native?.build ?? 0)", destination: u).foregroundStyle(Color.dtAccent) }
             if let notes = live.native?.notes, live.nativeNewer, !notes.isEmpty { Text(notes).font(.footnote).foregroundStyle(.secondary) }
@@ -126,7 +133,7 @@ struct UpdateCenterView: View {
     private var securitySection: some View {
         Section {
             kv("Signing key", live.pinnedKeyFingerprint ?? "Not seen yet")
-            kv("Trust", { switch live.keyState { case .pinnedByApp: return "Built into this app"; case .trusted: return "Trusted on first use"; case .changed: return "Changed: needs your OK"; case .none: return "Not checked yet" } }())
+            kv("Trust", { switch live.keyState { case .pinnedByApp: return "Built into this app"; case .trusted: return "Confirmed by you"; case .unenrolled: return "Waiting for you to confirm"; case .changed: return "Changed: needs your OK"; case .none: return "Not checked yet" } }())
         } header: { Text("SECURITY") } footer: { Text("Updates only apply when their signature matches this key. Nothing downloaded is run as code.") }
         .listRowBackground(Color.white.opacity(0.06))
     }

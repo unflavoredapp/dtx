@@ -36,7 +36,12 @@ struct RootView: View {
         .task { await session.refresh() }
         // the repos are only fetched once you are in, so signing in never waits behind a big download
         .task(id: session.allowed) { if session.allowed { await store.refresh() } }
-        .task(id: session.allowed) { if session.allowed { await live.syncIfDue() } }
+        .task(id: session.allowed) {
+            guard session.allowed else { return }
+            await live.syncIfDue()
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            live.confirmHealthy()
+        }
         .animation(.easeInOut(duration: 0.25), value: session.allowed)
         .onChange(of: scenePhase) { phase in if phase == .active { session.nudge(); if session.allowed { Task { await live.syncIfDue() } } } }
     }

@@ -136,7 +136,7 @@ enum RecipeRunner {
                 if let s = o.strip { items = items.map { $0.replacingOccurrences(of: s, with: "") } }
                 let f = fill(o.filter ?? "").lowercased()
                 if !f.isEmpty { items = items.filter { $0.lowercased().contains(f) } }
-                if let l = o.limit { items = Array(items.prefix(l)) }
+                if let l = o.limit { items = Array(items.prefix(max(0, min(l, 5000)))) }
                 if !items.isEmpty { out.append(PluginSection(title: fill(o.title ?? "", n: items.count), kind: "list", items: items)) }
             case "table":
                 var rows: [[String]] = (o.rows ?? []).map { $0.map { fill($0) } }
@@ -154,7 +154,17 @@ enum RecipeRunner {
                 if !t.isEmpty { out.append(PluginSection(title: fill(o.title ?? ""), kind: "text", text: t)) }
             }
         }
-        return out
+        return capped(out)
+    }
+
+    /// Whatever a recipe produces is trimmed before it reaches the screen: a bad or oversized recipe can't flood the UI.
+    private static func capped(_ sections: [PluginSection]) -> [PluginSection] {
+        func cut(_ s: String, _ n: Int) -> String { s.count > n ? String(s.prefix(n)) : s }
+        return sections.prefix(30).map { s in
+            PluginSection(title: cut(s.title, 120), kind: s.kind,
+                          rows: s.rows.prefix(1000).map { $0.prefix(10).map { cut($0, 500) } },
+                          items: s.items.prefix(5000).map { cut($0, 500) }, cols: s.cols, text: cut(s.text, 200_000), note: cut(s.note, 300))
+        }
     }
 
     /// `*` matches inside one folder level; nothing else is special.

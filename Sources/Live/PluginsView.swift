@@ -32,6 +32,9 @@ struct PluginsTableView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    Toggle("Pause all auto-run", isOn: Binding(get: { ToolPrefs.autoPaused }, set: { ToolPrefs.autoPaused = $0; catalog.objectWillChange.send() })).tint(.dtAccent)
+                } footer: { Text("Stops every tool from starting by itself. You can still run them by hand.") }.listRowBackground(Color.white.opacity(0.06))
                 section("In the app", "iphone", catalog.bundled)
                 section("Recipes from your server", "arrow.down.circle", catalog.recipes, empty: catalog.loading ? "Loading…" : "No recipes on the server.")
                 section("Run on your server", "server.rack", catalog.server, empty: catalog.loading ? "Loading…" : (catalog.serverNote.isEmpty ? "No server tools installed." : catalog.serverNote))
@@ -118,8 +121,9 @@ struct PluginControllerView: View {
             Section("Control") {
                 Toggle("Show in Tools", isOn: $enabled).tint(.dtAccent)
                     .onChange(of: enabled) { ToolPrefs.setEnabled(tool, $0); changed = true }
-                Toggle("Run automatically when I open an app", isOn: $auto).tint(.dtAccent).disabled(!enabled)
+                AutoRunToggle(tool: tool, label: "Run automatically when I open an app", isOn: $auto).disabled(!enabled)
                     .onChange(of: auto) { ToolPrefs.setAuto(tool, $0); changed = true }
+                if ToolPrefs.autoPaused { Text("Auto-run is paused for every tool.").font(.footnote).foregroundStyle(Color.dtYellow) }
                 if ToolPrefs.hasOwnChoice(tool) || changed {
                     Button("Reset to the default") { ToolPrefs.reset(tool); enabled = ToolPrefs.enabled(tool); auto = ToolPrefs.auto(tool); changed = false }.foregroundStyle(Color.dtAccent)
                 }
@@ -133,14 +137,16 @@ struct PluginControllerView: View {
                 kv("Default", tool.auto ? "Runs automatically" : "Runs when you tap Run")
             }.listRowBackground(Color.white.opacity(0.06))
             if !tool.options.isEmpty {
-                Section("Options (\(tool.options.count))") {
-                    ForEach(tool.options) { o in kv(o.label, o.type + (o.def.isEmpty ? "" : " · default “\(o.def)”")) }
-                }.listRowBackground(Color.white.opacity(0.06))
+                Section {
+                    ForEach(tool.options) { o in optionEditor(o) }
+                } header: { Text("Options (\(tool.options.count))") } footer: { Text("These are the values the tool starts with, including when it runs by itself.") }
+                .listRowBackground(Color.white.opacity(0.06))
             }
             Section("Latest result") {
                 if let l = runner.last(tool) {
                     kv("For", l.url.split(separator: "/").last.map(String.init) ?? l.url)
-                    kv("Answer", l.state.failed ? l.state.message : (l.state.sections.isEmpty ? "Nothing to report" : "\(l.state.sections.count) section\(l.state.sections.count == 1 ? "" : "s")"))
+                    kv("Answer", l.state.failed ? "Failed: " + l.state.message : (l.state.sections.isEmpty ? "Nothing to report" : "\(l.state.sections.count) section\(l.state.sections.count == 1 ? "" : "s")"))
+                    kv("When", l.state.at.formatted(date: .abbreviated, time: .shortened))
                 } else { Text("It hasn't run since the app opened. Open an app and go to its Tools tab.").font(.footnote).foregroundStyle(.secondary) }
             }.listRowBackground(Color.white.opacity(0.06))
         }
@@ -155,5 +161,18 @@ struct PluginControllerView: View {
             Spacer(minLength: 12)
             Text(v).multilineTextAlignment(.trailing).textSelection(.enabled)
         }.font(.subheadline)
+    }
+
+    @ViewBuilder
+    private func optionEditor(_ o: PluginOption) -> some View {
+        if o.type == "bool" {
+            Toggle(o.label, isOn: Binding(get: { (ToolPrefs.option(tool, o.key) ?? o.def) == "true" }, set: { ToolPrefs.setOption(tool, o.key, $0 ? "true" : "false"); changed = true })).tint(.dtAccent)
+        } else {
+            HStack {
+                Text(o.label).foregroundStyle(.secondary).font(.subheadline)
+                TextField(o.def.isEmpty ? "default" : o.def, text: Binding(get: { ToolPrefs.option(tool, o.key) ?? "" }, set: { ToolPrefs.setOption(tool, o.key, $0.isEmpty ? nil : $0); changed = true }))
+                    .multilineTextAlignment(.trailing).textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(o.type == "number" ? .numberPad : .default)
+            }
+        }
     }
 }
