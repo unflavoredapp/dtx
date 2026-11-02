@@ -132,7 +132,7 @@ struct RepoInfo: Codable, Identifiable, Hashable {
     var name: String
 }
 
-enum AppTab: Hashable { case search, studio, repos, settings }
+enum AppTab: Hashable { case home, search, repos, settings }
 
 func compareVersions(_ a: String, _ b: String) -> Int {
     func parts(_ s: String) -> [Int] { s.split(whereSeparator: { !$0.isNumber }).map { Int($0) ?? 0 } }

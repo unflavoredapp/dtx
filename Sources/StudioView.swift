@@ -1,20 +1,42 @@
 import SwiftUI
 import WebKit
 
-/// The website's Studio, inside the app. It shares the website's own sign-in and does the real work on the server.
-struct StudioView: View {
-    @EnvironmentObject var store: RepoStore
+/// The website's Studio for one app, in a sheet. It shares the website's sign-in and does the real work on the server.
+struct StudioSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var model = WebModel()
+    let url: URL
+
+    var body: some View {
+        NavigationStack {
+            ZStack(alignment: .top) {
+                WebView(model: model).ignoresSafeArea(edges: .bottom)
+                if model.progress < 1 { ProgressView(value: model.progress).tint(.orange) }
+            }
+            .navigationTitle("Decrypt & Inject").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+        }
+        .onAppear { model.load(url: url) }
+    }
+}
+
+/// Signing in happens on the website (Telegram login). Closing this copies the sign-in to the app.
+struct LoginSheet: View {
+    @EnvironmentObject var session: Session
+    @Environment(\.dismiss) private var dismiss
     @StateObject private var model = WebModel()
 
     var body: some View {
-        ZStack(alignment: .top) {
-            WebView(model: model)
-                .ignoresSafeArea(edges: .bottom)
-            if model.progress < 1 { ProgressView(value: model.progress).tint(.orange) }
+        NavigationStack {
+            ZStack(alignment: .top) {
+                WebView(model: model).ignoresSafeArea(edges: .bottom)
+                if model.progress < 1 { ProgressView(value: model.progress).tint(.orange) }
+            }
+            .navigationTitle("Sign in").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { Task { await session.syncCookies(); dismiss() } } } }
         }
-        .onAppear { model.load(server: store.server, path: store.studioPath) }
-        .onChange(of: store.studioPath) { model.load(server: store.server, path: $0) }
-        .onChange(of: store.server) { model.load(server: $0, path: store.studioPath) }
+        .onAppear { if let u = URL(string: Api.shared.base + "/") { model.load(url: u) } }
+        .onDisappear { Task { await session.syncCookies() } }
     }
 }
 
@@ -41,9 +63,8 @@ final class WebModel: NSObject, ObservableObject, WKNavigationDelegate, WKUIDele
         }
     }
 
-    func load(server: String, path: String) {
-        let base = server.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        guard let url = URL(string: base + path), url.scheme == "https" else { return }
+    func load(url: URL) {
+        guard url.scheme == "https" else { return }
         if loaded == url.absoluteString { return }
         loaded = url.absoluteString
         web.load(URLRequest(url: url))

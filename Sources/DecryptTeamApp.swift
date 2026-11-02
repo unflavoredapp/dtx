@@ -3,27 +3,31 @@ import SwiftUI
 @main
 struct DecryptTeamApp: App {
     @StateObject private var store = RepoStore()
+    @StateObject private var session = Session()
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(store)
+                .environmentObject(session)
                 .preferredColorScheme(.dark)
+                .tint(.dtAccent)
         }
     }
 }
 
 struct RootView: View {
     @EnvironmentObject var store: RepoStore
+    @EnvironmentObject var session: Session
 
     var body: some View {
         TabView(selection: $store.tab) {
+            HomeView()
+                .tabItem { Label("Home", systemImage: "house") }
+                .tag(AppTab.home)
             SearchView()
-                .tabItem { Label("Search", systemImage: "magnifyingglass") }
+                .tabItem { Label("Apps", systemImage: "square.grid.2x2") }
                 .tag(AppTab.search)
-            StudioView()
-                .tabItem { Label("Studio", systemImage: "wand.and.stars") }
-                .tag(AppTab.studio)
             ReposView()
                 .tabItem { Label("Repos", systemImage: "square.stack.3d.up") }
                 .tag(AppTab.repos)
@@ -31,6 +35,7 @@ struct RootView: View {
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(AppTab.settings)
         }
-        .task { await store.refresh() }
+        .task { await store.refresh(); await session.refresh() }
+        .sheet(isPresented: $session.showLogin) { LoginSheet() }
     }
 }

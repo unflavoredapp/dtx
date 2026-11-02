@@ -10,9 +10,7 @@ final class RepoStore: ObservableObject {
     @Published var apps: [AppEntry] = []
     @Published var loading = false
     @Published var message: String?
-    @Published var tab: AppTab = .search
-    /// Path inside the website that the Studio tab should open (e.g. "/studio/app/com.example.app").
-    @Published var studioPath: String = "/"
+    @Published var tab: AppTab = .home
 
     @AppStorage("dt.server") var server: String = "https://decrypt.team"
 
@@ -68,12 +66,6 @@ final class RepoStore: ObservableObject {
         repos.removeAll { $0.url == r.url }
         save()
         apps.removeAll { $0.repoURL == r.url }
-    }
-
-    func openInStudio(_ app: AppEntry) {
-        let bid = app.bid.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? app.bid
-        studioPath = "/studio/app/\(bid)?repo=" + (app.repoURL.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")
-        tab = .studio
     }
 
     // MARK: network

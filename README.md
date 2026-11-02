@@ -2,9 +2,11 @@
 
 Native app for [Decrypt.team](https://decrypt.team): search the apps in your repos, see their versions, download or hand them to a sideloader, and open the website's Studio (decrypt + inject on the server) inside the app.
 
-- **Search**: AltStore/SideStore style repos. `https://delvek.net/repo.json` is the starting repo; add your own under **Repos**.
-- **Studio**: the website in a web view, sharing its sign-in. Finished IPAs download straight to the share sheet / Files.
-- **Settings**: server address.
+- **Home** (native): featured tools, search across your repos, changelog and live platform stats from the site.
+- **Apps / Repos / Settings** (native): browse every app in your repos, add repos, set the server address. `https://delvek.net/repo.json` is the starting repo.
+- **App page** (native): versions, saved dylibs and frameworks, store info, **Tools** (server plugins such as Load Commands and Strings), download or hand to a sideloader.
+- **Decrypt & Inject**: opens the site's Studio for that app in a sheet (builds run on the server). A native version of this screen is next.
+- **Sign in**: the site's login in a sheet; the app then uses the same session.
 
 ## Build an unsigned IPA on GitHub
 1. Push this folder to a GitHub repo (branch `main`).
