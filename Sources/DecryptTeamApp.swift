@@ -21,6 +21,20 @@ struct RootView: View {
     @EnvironmentObject var session: Session
 
     var body: some View {
+        Group {
+            if !session.checked {
+                ZStack { Color.dtBG.ignoresSafeArea(); ProgressView() }
+            } else if !session.allowed {
+                OnboardingView()
+            } else {
+                mainTabs
+            }
+        }
+        .task { await store.refresh(); await session.refresh() }
+        .animation(.easeInOut(duration: 0.25), value: session.allowed)
+    }
+
+    private var mainTabs: some View {
         TabView(selection: $store.tab) {
             HomeView()
                 .tabItem { Label("Home", systemImage: "house") }
@@ -35,7 +49,6 @@ struct RootView: View {
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(AppTab.settings)
         }
-        .task { await store.refresh(); await session.refresh() }
         .sheet(isPresented: $session.showLogin) { LoginSheet() }
     }
 }

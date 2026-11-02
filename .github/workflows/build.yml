@@ -16,11 +16,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Prepare the log folder
+        run: mkdir -p logs
+
       - name: Install XcodeGen
-        run: brew install xcodegen
+        run: set -o pipefail; brew install xcodegen 2>&1 | tee logs/01-xcodegen-install.log
 
       - name: Generate the Xcode project
-        run: xcodegen generate
+        run: set -o pipefail; xcodegen generate 2>&1 | tee logs/02-xcodegen-generate.log
 
       - name: Build (no signing)
         run: |
@@ -33,7 +36,7 @@ jobs:
             -destination 'generic/platform=iOS' \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            clean build | tail -n 60
+            clean build 2>&1 | tee logs/03-xcodebuild.log | tail -n 60
 
       - name: Package the IPA
         run: |
@@ -43,12 +46,46 @@ jobs:
           mkdir Payload
           cp -R "$APP" Payload/
           zip -qry DecryptTeam.ipa Payload
-          ls -lh DecryptTeam.ipa
+          ls -lh DecryptTeam.ipa 2>&1 | tee logs/04-package.log
 
       - uses: actions/upload-artifact@v4
         with:
           name: DecryptTeam-unsigned-ipa
           path: DecryptTeam.ipa
+
+      # If anything above failed, bundle the logs into one zip you can download from the run page (Artifacts) and send over.
+      - name: Collect the error log
+        if: failure()
+        run: |
+          mkdir -p errorlog
+          {
+            echo "Decrypt.Team iOS build failed"
+            echo "Run:      $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "Commit:   $GITHUB_SHA ($GITHUB_REF_NAME)"
+            echo "Time:     $(date -u +%FT%TZ)"
+            echo "Runner:   $(sw_vers -productVersion 2>/dev/null) $(uname -m)"
+            echo "Xcode:    $(xcodebuild -version 2>&1 | tr '\n' ' ')"
+            echo "Swift:    $(swift --version 2>&1 | head -n 1)"
+            echo "XcodeGen: $(xcodegen --version 2>&1 | head -n 1)"
+          } > errorlog/SUMMARY.txt
+          cat logs/*.log 2>/dev/null | grep -E "error:|\*\* BUILD FAILED|Command .* failed|fatal error" | awk '!seen[$0]++' | head -n 80 > errorlog/ERRORS.txt || true
+          test -s errorlog/ERRORS.txt || echo "No 'error:' lines found. Open the full logs." > errorlog/ERRORS.txt
+          cp -R logs errorlog/logs 2>/dev/null || true
+          find build -name "*.xcresult" -maxdepth 4 -exec cp -R {} errorlog/ \; 2>/dev/null || true
+          cp project.yml errorlog/ 2>/dev/null || true
+          (cd errorlog && zip -qry ../DecryptTeam-error-log.zip .)
+          ls -lh DecryptTeam-error-log.zip
+          echo "### Build failed" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"; head -n 25 errorlog/ERRORS.txt >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "Download **DecryptTeam-error-log** from the Artifacts section of this run." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the error log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DecryptTeam-error-log
+          path: DecryptTeam-error-log.zip
+          if-no-files-found: ignore
 
       - name: Attach to the release
         if: startsWith(github.ref, 'refs/tags/v')
