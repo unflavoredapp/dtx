@@ -9,9 +9,7 @@ struct OnboardingView: View {
 
     var body: some View {
         ZStack {
-            Color.dtBG.ignoresSafeArea()
-            RadialGradient(colors: [Color.dtAccent.opacity(0.22), .clear], center: .top, startRadius: 10, endRadius: 420)
-                .ignoresSafeArea()
+            AppBackground()
             VStack(spacing: 0) {
                 if onLogin { login.transition(.opacity) } else { intro.transition(.opacity) }
             }

@@ -68,6 +68,7 @@ enum LoginPhase: Equatable {
 final class Session: ObservableObject {
     @Published var username: String?
     @Published var beta = false
+    @Published var staff = false
     @Published var checked = false
     @Published var phase: LoginPhase = .idle
 
@@ -80,6 +81,7 @@ final class Session: ObservableObject {
         let me: MeReply? = try? await Api.shared.get("/api/auth/me")
         username = me?.user?.username
         beta = me?.user?.beta ?? false
+        staff = me?.user?.staff ?? false
         checked = true
     }
 

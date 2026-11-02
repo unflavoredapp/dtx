@@ -41,7 +41,7 @@ struct AppDetailView: View {
             }
             .padding(16)
         }
-        .background(Color.dtBG)
+        .background(AppBackground())
         .navigationTitle(app.name)
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }

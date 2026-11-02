@@ -11,6 +11,8 @@ final class RepoStore: ObservableObject {
     @Published var loading = false
     @Published var message: String?
     @Published var tab: AppTab = .home
+    @Published var showQuickBuild = false
+    @Published var showTools = false
 
     @AppStorage("dt.server") var server: String = "https://decrypt.team"
 

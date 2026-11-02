@@ -26,6 +26,7 @@ struct SettingsView: View {
                     LabeledContent("Builds", value: "Unsigned. Sign it with your own certificate to install.")
                 }
             }
+            .scrollContentBackground(.hidden).background(AppBackground())
             .navigationTitle("Settings")
         }
     }

@@ -31,6 +31,7 @@ struct ReposView: View {
                     .onDelete { idx in idx.map { store.repos[$0] }.forEach { store.remove($0) } }
                 }
             }
+            .scrollContentBackground(.hidden).background(AppBackground())
             .navigationTitle("Repos")
             .toolbar { EditButton() }
         }

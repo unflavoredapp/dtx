@@ -267,7 +267,7 @@ struct BuildScreen: View {
             }
             .padding(16)
         }
-        .background(Color.dtBG)
+        .background(AppBackground())
         .navigationTitle("Decrypt & Inject").navigationBarTitleDisplayMode(.inline)
         .onAppear { useStore = newer || repoURL == nil }
         .onChange(of: storeInfo?.ver) { _ in if model.stage == .idle { useStore = newer || repoURL == nil } }

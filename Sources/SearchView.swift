@@ -68,6 +68,7 @@ struct SearchView: View {
                 }
             }
             .overlay { if store.loading && store.apps.isEmpty { ProgressView() } }
+            .scrollContentBackground(.hidden).background(AppBackground())
             .navigationTitle("Decrypt.team")
             .navigationDestination(for: AppEntry.self) { AppDetailView(app: $0) }
             .searchable(text: $query, prompt: "Search apps in your repos")

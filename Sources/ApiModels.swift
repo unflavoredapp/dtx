@@ -163,3 +163,20 @@ struct PluginJob: Decodable {
     var error: String?
     var result: Result?
 }
+
+// MARK: - Recent activity
+
+struct RecentReply: Decodable {
+    struct Item: Decodable, Identifiable {
+        var name: String
+        var ver: String
+        var icon: String?
+        var id: String { name + "|" + ver }
+        enum K: String, CodingKey { case name, ver, icon }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: K.self)
+            name = c.flexString(.name) ?? "App"; ver = c.flexString(.ver) ?? ""; icon = c.flexString(.icon)
+        }
+    }
+    var items: [Item]?
+}

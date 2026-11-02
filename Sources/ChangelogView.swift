@@ -27,7 +27,7 @@ struct ChangelogView: View {
                 }
                 .padding(16)
             }
-            .background(Color.dtBG)
+            .background(AppBackground())
             .navigationTitle("Changelog").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
         }
