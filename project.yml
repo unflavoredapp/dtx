@@ -16,12 +16,9 @@ targets:
   DecryptTeam:
     type: application
     platform: iOS
-        sources:
-      - path: Sources
-        excludes:
-          - "Tools/**"
-      - Tools
-      - Resource
+    sources:
+      - Sources
+      - Resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: team.decrypt.0xDEC7977EA1

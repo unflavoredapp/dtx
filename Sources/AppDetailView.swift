@@ -37,7 +37,7 @@ struct AppDetailView: View {
                 if update, let v = storeInfo?.ver { banner(v) }
                 Picker("", selection: $tab) {
                     ForEach(DetailTab.allCases, id: \.self) { t in
-                        Text(t == .dylibs ? "Dylibs (\(dylibs.count))" : t == .frameworks ? "Frameworks (\(frameworks.count))" : t.rawValue).tag(t)
+                        Text(t == .dylibs ? "Dylibs (\((dylibs.isEmpty ? scannedDylibs : dylibs).count))" : t == .frameworks ? "Frameworks (\((frameworks.isEmpty ? scannedFrameworks : frameworks).count))" : t.rawValue).tag(t)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -45,7 +45,7 @@ struct AppDetailView: View {
                 actions
                 versions
             }
-            .padding(16)
+            .padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 110)   // the last card clears the floating tab bar
         }
         .background(AppBackground())
         .navigationTitle(app.name)
@@ -129,6 +129,7 @@ struct AppDetailView: View {
                 if it.id != list.last?.id { Divider().overlay(Color.dtLine) }
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .card()
     }
 
@@ -266,112 +267,6 @@ struct AppDetailView: View {
     static func https(_ s: String?) -> URL? {
         guard let s, let u = URL(string: s), u.scheme == "https" else { return nil }
         return u
-    }
-}
-
-// MARK: - Tools (plugins that run on the server)
-
-struct ToolsPanel: View {
-    @EnvironmentObject var session: Session
-    let url: String
-    @State private var list: [PluginInfo] = []
-    @State private var loaded = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if url.isEmpty {
-                Text("Tools open the repo's IPA. This app has no repo IPA.").foregroundStyle(.secondary)
-            } else if !loaded {
-                ProgressView().frame(maxWidth: .infinity).padding(20)
-            } else if list.isEmpty {
-                Text("No tools are installed on this server.").foregroundStyle(.secondary)
-            } else {
-                ForEach(list) { p in ToolRow(plugin: p, url: url) }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .card()
-        .task { await load() }
-    }
-
-    private func load() async {
-        let r: PluginList? = try? await Api.shared.get("/api/plugins")
-        list = r?.items ?? []; loaded = true
-    }
-}
-
-struct ToolRow: View {
-    @EnvironmentObject var session: Session
-    let plugin: PluginInfo
-    let url: String
-    @State private var values: [String: String] = [:]
-    @State private var flags: [String: Bool] = [:]
-    @State private var running = false
-    @State private var jobID = ""
-    @State private var message = ""
-    @State private var failed = false
-    @State private var sections: [PluginSection] = []
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(plugin.name).font(.subheadline.bold()).foregroundStyle(.white)
-                    Text(plugin.description).font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button(running ? "Cancel" : "Run") { running ? cancel() : start() }
-                    .buttonStyle(.bordered).tint(.dtAccent).disabled(!session.signedIn)
-            }
-            ForEach(plugin.options) { o in
-                if o.type == "bool" {
-                    Toggle(o.label, isOn: Binding(get: { flags[o.key] ?? (o.def == "true") }, set: { flags[o.key] = $0 })).font(.subheadline)
-                } else {
-                    TextField(o.label, text: Binding(get: { values[o.key] ?? o.def }, set: { values[o.key] = $0 }))
-                        .textFieldStyle(.roundedBorder).textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .keyboardType(o.type == "number" ? .numberPad : .default)
-                }
-            }
-            if !message.isEmpty { Text(message).font(.caption).foregroundStyle(failed ? Color.red : Color.secondary) }
-            ForEach(sections) { SectionView(section: $0) }
-            Divider().overlay(Color.dtLine)
-        }
-    }
-
-    private func start() {
-        running = true; failed = false; message = "Starting…"; sections = []
-        var opts: [String: Any] = [:]
-        for o in plugin.options { opts[o.key] = o.type == "bool" ? (flags[o.key] ?? (o.def == "true")) : (values[o.key] ?? o.def) }
-        Task {
-            do {
-                let s: PluginStart = try await Api.shared.post("/api/plugins/\(plugin.id)/run", json: ["src": ["url": url], "options": opts])
-                jobID = s.id ?? ""
-                await poll()
-            } catch {
-                failed = true; message = error.localizedDescription; running = false
-            }
-        }
-    }
-
-    private func poll() async {
-        while running, !jobID.isEmpty {
-            do {
-                let j: PluginJob = try await Api.shared.get("/api/plugins/jobs/" + jobID)
-                switch j.status ?? "" {
-                case "done": sections = j.result?.sections ?? []; message = ""; running = false; return
-                case "err", "cancel": failed = (j.status == "err"); message = j.error ?? "Stopped."; running = false; return
-                default: message = (j.msg ?? "Working…") + ((j.pct ?? 0) > 0 ? " · \(j.pct ?? 0)%" : "")
-                }
-            } catch {
-                failed = true; message = error.localizedDescription; running = false; return
-            }
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
-        }
-    }
-
-    private func cancel() {
-        let id = jobID; running = false; message = "Stopped."
-        Task { let _: PluginStart? = try? await Api.shared.post("/api/plugins/jobs/\(id)/cancel") }
     }
 }
 
