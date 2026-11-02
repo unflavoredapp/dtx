@@ -28,7 +28,9 @@ targets:
       path: Sources/Info.plist
       properties:
         CFBundleDisplayName: Decrypt.team
-        UILaunchScreen: {}
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+          UIImageRespectsSafeAreaInsets: true
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
