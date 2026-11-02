@@ -13,6 +13,7 @@ struct HomeView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 18) {
+                    LiveBannerView()
                     tools
                     if store.onlyDefault { repoNotice }
                     statsRow

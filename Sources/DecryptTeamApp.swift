@@ -21,6 +21,7 @@ struct RootView: View {
     @EnvironmentObject var store: RepoStore
     @EnvironmentObject var session: Session
     @Environment(\.scenePhase) private var scenePhase
+    @ObservedObject private var live = LiveSync.shared
 
     var body: some View {
         Group {
@@ -29,14 +30,15 @@ struct RootView: View {
             } else if !session.allowed {
                 OnboardingView()
             } else {
-                mainTabs
+                mainTabs.id(live.themeRev)      // rebuilt only when a live release changes the accent colour
             }
         }
         .task { await session.refresh() }
         // the repos are only fetched once you are in, so signing in never waits behind a big download
         .task(id: session.allowed) { if session.allowed { await store.refresh() } }
+        .task(id: session.allowed) { if session.allowed { await live.syncIfDue() } }
         .animation(.easeInOut(duration: 0.25), value: session.allowed)
-        .onChange(of: scenePhase) { phase in if phase == .active { session.nudge() } }
+        .onChange(of: scenePhase) { phase in if phase == .active { session.nudge(); if session.allowed { Task { await live.syncIfDue() } } } }
     }
 
     private var mainTabs: some View {

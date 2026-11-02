@@ -107,6 +107,7 @@ struct PluginOption: Decodable, Identifiable {
     var type: String
     var def: String
     enum K: String, CodingKey { case key, label, type, def }
+    init(key: String, label: String, type: String = "text", def: String = "") { self.key = key; self.label = label; self.type = type; self.def = def }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: K.self)
         key = c.flexString(.key) ?? ""
@@ -120,13 +121,15 @@ struct PluginInfo: Decodable, Identifiable {
     var id: String
     var name: String
     var description: String
+    var version: String
     var options: [PluginOption]
-    enum K: String, CodingKey { case id, name, description, options }
+    enum K: String, CodingKey { case id, name, description, options, version }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: K.self)
         id = c.flexString(.id) ?? ""
         name = c.flexString(.name) ?? id
         description = c.flexString(.description) ?? ""
+        version = c.flexString(.version) ?? ""
         options = (try? c.decodeIfPresent([Lossy<PluginOption>].self, forKey: .options))?.compactMap { $0.value } ?? []
     }
 }
@@ -144,6 +147,9 @@ struct PluginSection: Decodable, Identifiable {
     var text: String
     var note: String
     enum K: String, CodingKey { case title, kind, rows, items, cols, text, note }
+    init(title: String, kind: String, rows: [[String]] = [], items: [String] = [], cols: [String] = [], text: String = "", note: String = "") {
+        self.title = title; self.kind = kind; self.rows = rows; self.items = items; self.cols = cols; self.text = text; self.note = note
+    }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: K.self)
         title = c.flexString(.title) ?? ""

@@ -31,6 +31,8 @@ struct Tool: Identifiable {
     var options: [PluginOption] = []
     /// Runs by itself in the background when an app opens (the person can switch this per tool).
     var auto: Bool = false
+    /// Shown in Settings > Plugins; a change since the person last looked marks the tool as updated.
+    var version: String = ""
     let run: (ToolContext) async throws -> [PluginSection]
 }
 

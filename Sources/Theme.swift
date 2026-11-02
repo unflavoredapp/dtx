@@ -4,7 +4,7 @@ extension Color {
     static let dtBG = Color.black
     static let dtCard = Color(red: 0.085, green: 0.085, blue: 0.095)
     static let dtLine = Color.white.opacity(0.10)
-    static let dtAccent = Color(red: 0.64, green: 0.95, blue: 0.42)      // lime green
+    static var dtAccent: Color { LiveTheme.accent ?? Color(red: 0.64, green: 0.95, blue: 0.42) }      // lime green unless a live release says otherwise
     static let dtGreen = Color(red: 0.64, green: 0.95, blue: 0.42)
     static let dtYellow = Color(red: 0.98, green: 0.84, blue: 0.28)
 }

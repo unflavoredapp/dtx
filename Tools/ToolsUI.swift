@@ -5,6 +5,7 @@ import SwiftUI
 struct ToolsPanel: View {
     let url: String
     @StateObject private var runner = ToolRunner.shared
+    @ObservedObject private var live = LiveSync.shared
     @State private var recipes: [Tool] = []
     @State private var server: [Tool] = []
     @State private var status: ServerTools.Status?
@@ -17,14 +18,14 @@ struct ToolsPanel: View {
                     .frame(maxWidth: .infinity, alignment: .leading).card()
             } else {
                 group("ON THIS DEVICE", "iphone") {
-                    ForEach(ToolRegistry.bundled) { row($0) }
+                    ForEach(ToolPrefs.arrange(ToolRegistry.bundled)) { row($0) }
                 }
-                if !recipes.isEmpty {
+                if !recipes.isEmpty, live.flag("recipes") {
                     group("DOWNLOADED FROM YOUR SERVER", "arrow.down.circle") {
-                        ForEach(recipes) { row($0) }
+                        ForEach(ToolPrefs.arrange(recipes)) { row($0) }
                     }
                 }
-                group("RUNS ON YOUR SERVER", "server.rack") {
+                if live.flag("serverTools") { group("RUNS ON YOUR SERVER", "server.rack") {
                     switch status {
                     case .none:
                         ProgressView().frame(maxWidth: .infinity).padding(12)
@@ -33,9 +34,9 @@ struct ToolsPanel: View {
                         Button("Try again") { Task { await load() } }.font(.footnote.weight(.semibold)).foregroundStyle(Color.dtAccent)
                     case .some(.ok(let n)):
                         if n == 0 { Text("Connected, but no tools are installed on the server yet.").font(.footnote).foregroundStyle(.secondary) }
-                        ForEach(server) { row($0) }
+                        ForEach(ToolPrefs.arrange(server)) { row($0) }
                     }
-                }
+                } }
             }
         }
         .task(id: url) { await load() }
@@ -56,13 +57,13 @@ struct ToolsPanel: View {
 
     private func load() async {
         guard !url.isEmpty else { return }
-        autoRun(ToolRegistry.bundled)
+        autoRun(ToolPrefs.arrange(ToolRegistry.bundled))
         status = nil
         async let r = RecipeStore.load()
         let (tools, st) = await ServerTools.load()
         server = tools; status = st
         recipes = await r
-        autoRun(recipes + server)
+        autoRun(ToolPrefs.arrange(recipes) + ToolPrefs.arrange(server))
     }
 
     /// Starts every tool the person left on Auto, once per link.

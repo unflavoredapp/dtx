@@ -5,6 +5,9 @@ struct SettingsView: View {
     @EnvironmentObject var store: RepoStore
     @EnvironmentObject var session: Session
     @ObservedObject private var signed = SignedStore.shared
+    @ObservedObject private var live = LiveSync.shared
+    @State private var showUpdates = false
+    @State private var showPlugins = false
     @State private var showAbout = false
     @State private var showChangelog = false
     @State private var confirmSignOut = false
@@ -19,6 +22,10 @@ struct SettingsView: View {
                     header("GENERAL")
                     row("info", "About", "App information and version") { showAbout = true }
                     row("doc.text.fill", "Changelog", "What changed in Decrypt.Team") { showChangelog = true }
+
+                    header("PLUGINS & UPDATES")
+                    row("arrow.triangle.2.circlepath", "Live Update", live.updateAvailable ? "Release \(live.manifest?.rev ?? 0) is available" : (live.rev == 0 ? "Runtime \(Runtime.version) · tap to sync" : "Runtime \(Runtime.version) · release #\(live.rev)")) { showUpdates = true }
+                    row("puzzlepiece.extension.fill", "Plugins", "Every tool, its version and switches") { showPlugins = true }
 
                     header("ACCOUNT")
                     row("person.fill", "Account", "\(session.username ?? "") · \(session.staff ? "Staff" : "Closed beta")") { confirmSignOut = true }
@@ -46,6 +53,8 @@ struct SettingsView: View {
             .background(AppBackground())
             .withTopBar(.settings, title: "Settings", actions: [.label("DECRYPT.TEAM " + version)])
             .sheet(isPresented: $showChangelog) { ChangelogView() }
+            .sheet(isPresented: $showUpdates) { UpdateCenterView() }
+            .sheet(isPresented: $showPlugins) { PluginsTableView() }
             .sheet(isPresented: $showAbout) { aboutSheet }
             .confirmationDialog("Sign out of \(session.username ?? "this account")?", isPresented: $confirmSignOut, titleVisibility: .visible) {
                 Button("Sign out", role: .destructive) { Task { await session.signOut() } }
