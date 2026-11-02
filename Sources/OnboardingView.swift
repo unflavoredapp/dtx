@@ -1,19 +1,11 @@
 import SwiftUI
 
-/// First screen of the app. Three intro pages, then the Telegram sign-in. The app is in a closed beta for Decrypt.Team staff.
+/// First screen of the app: one intro page (what it is, why it is locked), then the Telegram sign-in. Closed beta for Decrypt.Team staff.
 struct OnboardingView: View {
     @EnvironmentObject var session: Session
     @Environment(\.openURL) private var openURL
     @AppStorage("dt.onboarded") private var seen = false
-    @State private var page = 0
-
-    private let pages: [(icon: String, title: String, text: String)] = [
-        ("magnifyingglass", "Find any app", "Search the repos you add and see every version, size and bundle ID in one place."),
-        ("lock.open.fill", "Decrypt & inject", "Builds run on the Decrypt.Team server. dtx.dylib goes into every build, and you can add your own libraries."),
-        ("wrench.and.screwdriver.fill", "Analysis tools", "Run first-party tools on any IPA: load commands, bundles, strings and more."),
-    ]
-
-    private var onLogin: Bool { seen || page >= pages.count }
+    private var onLogin: Bool { seen }
 
     var body: some View {
         ZStack {
@@ -28,45 +20,45 @@ struct OnboardingView: View {
         .animation(.easeInOut(duration: 0.25), value: onLogin)
     }
 
-    // MARK: intro
+    // MARK: intro (one page: what this is, and why it's locked)
 
     private var intro: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Spacer()
-                Button("Skip") { finishIntro() }.font(.subheadline).foregroundStyle(.secondary)
+        VStack(spacing: 16) {
+            Spacer()
+            Image("Logo").resizable().frame(width: 112, height: 112)
+                .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(Color.dtLine))
+                .shadow(color: Color.dtAccent.opacity(0.25), radius: 24)
+            Text("Decrypt.Team").font(.largeTitle.bold())
+            Text("iOS app discovery and decryption tools").font(.subheadline).foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 14) {
+                row("square.stack.3d.up.fill", "What this is",
+                    "The Decrypt.Team app. Browse your repos, decrypt apps and inject libraries on our server, and run analysis tools on any IPA.")
+                Divider().overlay(Color.dtLine)
+                row("lock.fill", "Why it's locked",
+                    "The app is in a closed beta for Decrypt.Team staff. We're still testing it, and the server does the heavy work, so access is limited to the team until it's ready.")
             }
+            .card()
             .padding(.top, 8)
-            TabView(selection: $page) {
-                ForEach(Array(pages.enumerated()), id: \.offset) { i, p in
-                    VStack(spacing: 18) {
-                        Spacer()
-                        Image(systemName: p.icon)
-                            .font(.system(size: 54, weight: .semibold))
-                            .foregroundStyle(Color.dtAccent)
-                            .frame(width: 118, height: 118)
-                            .background(Color.dtCard)
-                            .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
-                            .overlay(RoundedRectangle(cornerRadius: 30, style: .continuous).stroke(Color.dtLine))
-                        Text(p.title).font(.title.bold())
-                        Text(p.text).font(.body).multilineTextAlignment(.center).foregroundStyle(.secondary).padding(.horizontal, 6)
-                        Spacer()
-                    }
-                    .tag(i)
-                }
-            }
-            .tabViewStyle(.page(indexDisplayMode: .always))
-            Button {
-                if page < pages.count - 1 { withAnimation { page += 1 } } else { finishIntro() }
-            } label: {
-                Text(page < pages.count - 1 ? "Continue" : "Get started").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 15)
+            Spacer()
+            Button { seen = true } label: {
+                Text("Continue").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 15)
             }
             .buttonStyle(.borderedProminent).controlSize(.large)
             .padding(.bottom, 24)
         }
     }
 
-    private func finishIntro() { seen = true; page = pages.count }
+    private func row(_ icon: String, _ title: String, _ text: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon).font(.title3).foregroundStyle(Color.dtAccent).frame(width: 28)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.headline)
+                Text(text).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
 
     // MARK: sign in
 
@@ -78,7 +70,7 @@ struct OnboardingView: View {
                 .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(Color.dtLine))
             Text("Decrypt.Team").font(.largeTitle.bold())
             Pill(text: "CLOSED BETA", tone: .dtAccent)
-            Text("This app is only open to Decrypt.Team staff right now. Sign in with the Telegram account that's on the staff list.")
+            Text("Sign in with the Telegram account that's on the Decrypt.Team staff list.")
                 .font(.body).multilineTextAlignment(.center).foregroundStyle(.secondary).padding(.horizontal, 4)
             status
             Spacer()
