@@ -72,6 +72,7 @@ struct SetItem: Decodable, Identifiable, Hashable {
     var type: String
     var size: Int64
     enum K: String, CodingKey { case name, type, size }
+    init(name: String, type: String, size: Int64) { self.name = name; self.type = type; self.size = size }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: K.self)
         name = c.flexString(.name) ?? "?"

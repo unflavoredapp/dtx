@@ -14,11 +14,17 @@ struct AppDetailView: View {
     @State private var setID = ""
     @State private var loaded = false
     @State private var showBuild = false
+    @State private var catalogError = ""
+    @State private var scanned: [SetItem]?
+    @State private var scanning = false
+    @State private var scanError = ""
 
     private var curSet: SavedSet? { sets.first { $0.id == setID } ?? sets.first }
     private var items: [SetItem] { curSet?.items ?? [] }
     private var dylibs: [SetItem] { items.filter { $0.type != "framework" } }
     private var frameworks: [SetItem] { items.filter { $0.type == "framework" } }
+    private var scannedDylibs: [SetItem] { (scanned ?? []).filter { $0.type != "framework" } }
+    private var scannedFrameworks: [SetItem] { (scanned ?? []).filter { $0.type == "framework" } }
     private var update: Bool {
         guard let latest = storeInfo?.ver, let cur = app.current?.version else { return false }
         return compareVersions(latest, cur) > 0
@@ -45,6 +51,7 @@ struct AppDetailView: View {
         .navigationTitle(app.name)
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
+        .task { await scanIPA() }      // reads the IPA's libraries right away, alongside the saved list
         .navigationDestination(isPresented: $showBuild) { BuildScreen(app: app, storeInfo: storeInfo) }
     }
 
@@ -85,8 +92,8 @@ struct AppDetailView: View {
 
     @ViewBuilder private var content: some View {
         switch tab {
-        case .dylibs: itemList(dylibs, empty: "No dylibs saved for this app yet.")
-        case .frameworks: itemList(frameworks, empty: "No frameworks saved for this app yet.")
+        case .dylibs: VStack(spacing: 14) { itemList(dylibs, empty: "No dylibs saved for this app yet."); insideIPA(scannedDylibs, "dylibs") }
+        case .frameworks: VStack(spacing: 14) { itemList(frameworks, empty: "No frameworks saved for this app yet."); insideIPA(scannedFrameworks, "frameworks") }
         case .info: infoCard
         case .tools: ToolsPanel(url: app.current?.url?.absoluteString ?? "")
         }
@@ -101,7 +108,16 @@ struct AppDetailView: View {
                 .pickerStyle(.menu).padding(.bottom, 8)
             }
             if !loaded { ProgressView().frame(maxWidth: .infinity).padding(20) }
-            else if list.isEmpty { Text(empty).foregroundStyle(.secondary).padding(.vertical, 18) }
+            else if list.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(empty).foregroundStyle(.secondary)
+                    if !catalogError.isEmpty {
+                        Text(catalogError).font(.footnote).foregroundStyle(.red)
+                        Button("Try again") { Task { await load() } }.font(.footnote.weight(.semibold)).foregroundStyle(Color.dtAccent)
+                    }
+                }
+                .padding(.vertical, 18)
+            }
             ForEach(list) { it in
                 HStack(spacing: 10) {
                     Image(systemName: it.type == "framework" ? "square.stack.3d.up" : "shippingbox").foregroundStyle(Color.dtAccent).frame(width: 24)
@@ -114,6 +130,50 @@ struct AppDetailView: View {
             }
         }
         .card()
+    }
+
+    /// What is inside the repo's IPA itself, read straight from the file's index.
+    private func insideIPA(_ list: [SetItem], _ what: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Inside the IPA").font(.headline)
+            if scanned == nil {
+                if scanning {
+                    HStack(spacing: 10) { ProgressView(); Text("Reading the IPA's libraries…").foregroundStyle(.secondary) }.padding(.vertical, 6)
+                } else if app.current?.url == nil {
+                    Text("This repo has no download link for this version, so there is nothing to read.").font(.footnote).foregroundStyle(.secondary)
+                } else {
+                    Button { Task { await scanIPA() } } label: { Text("Scan again").frame(maxWidth: .infinity).padding(.vertical, 4) }
+                        .buttonStyle(AccentButtonStyle())
+                }
+            } else if list.isEmpty {
+                Text("No \(what) found inside this IPA.").foregroundStyle(.secondary)
+            } else {
+                ForEach(list) { it in
+                    HStack(spacing: 10) {
+                        Image(systemName: it.type == "framework" ? "square.stack.3d.up" : "shippingbox").foregroundStyle(Color.dtAccent).frame(width: 24)
+                        Text(it.name).foregroundStyle(.white).lineLimit(1)
+                        Spacer()
+                        if it.size > 0 { Text(ByteCountFormatter.string(fromByteCount: it.size, countStyle: .file)).font(.caption).foregroundStyle(.secondary) }
+                    }
+                    .padding(.vertical, 6)
+                    if it.id != list.last?.id { Divider().overlay(Color.dtLine) }
+                }
+            }
+            if !scanError.isEmpty { Text(scanError).font(.footnote).foregroundStyle(.red) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading).card()
+    }
+
+    private static var scanCache: [String: [SetItem]] = [:]
+
+    /// Runs on its own as soon as the app page opens; a finished scan is remembered while the app is open.
+    private func scanIPA() async {
+        guard let url = app.current?.url, !scanning else { return }
+        if let hit = Self.scanCache[url.absoluteString] { scanned = hit; return }
+        scanning = true; scanError = ""
+        do { let r = try await IPAScanner.scan(url); Self.scanCache[url.absoluteString] = r; scanned = r }
+        catch { scanError = error.localizedDescription }
+        scanning = false
     }
 
     private var infoCard: some View {
@@ -184,14 +244,23 @@ struct AppDetailView: View {
     private func load() async {
         let bid = app.bid.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? app.bid
         async let up: UpstreamReply? = try? Api.shared.get("/api/repo/upstream?bids=" + bid)
-        async let ss: SetsReply? = try? Api.shared.get("/api/dylibs/app/" + bid)
-        let u = await up, s = await ss
+        async let ss = fetchSets(bid)
+        let u = await up, res = await ss
         storeInfo = u?.items?[app.bid]?.store ?? u?.items?.values.first?.store
+        var s: SetsReply?
+        switch res {
+        case .success(let r): s = r; catalogError = ""
+        case .failure(let e): catalogError = "Couldn't reach the saved-libraries list: " + e.localizedDescription
+        }
         sets = (s?.sets ?? []).sorted { compareVersions($0.version, $1.version) > 0 }
         if setID.isEmpty {
             setID = (sets.first { $0.version == app.current?.version } ?? sets.first)?.id ?? ""
         }
         loaded = true
+    }
+
+    private func fetchSets(_ bid: String) async -> Result<SetsReply, Error> {
+        do { return .success(try await Api.shared.get("/api/dylibs/app/" + bid)) } catch { return .failure(error) }
     }
 
     static func https(_ s: String?) -> URL? {
