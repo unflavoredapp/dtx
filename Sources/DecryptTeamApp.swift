@@ -49,6 +49,5 @@ struct RootView: View {
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(AppTab.settings)
         }
-        .sheet(isPresented: $session.showLogin) { LoginSheet() }
     }
 }

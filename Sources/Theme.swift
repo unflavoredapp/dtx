@@ -1,5 +1,4 @@
 import SwiftUI
-import SafariServices
 
 extension Color {
     static let dtBG = Color(red: 0.067, green: 0.075, blue: 0.098)
@@ -33,15 +32,6 @@ struct Pill: View {
             .overlay(Capsule().stroke(tone.opacity(0.4)))
     }
 }
-
-/// A web page from the site (login, request form…) shown in a Safari sheet.
-struct SafariSheet: UIViewControllerRepresentable {
-    let url: URL
-    func makeUIViewController(context: Context) -> SFSafariViewController { SFSafariViewController(url: url) }
-    func updateUIViewController(_ vc: SFSafariViewController, context: Context) {}
-}
-
-struct IdentifiedURL: Identifiable { let url: URL; var id: String { url.absoluteString } }
 
 extension String {
     /// Percent-encodes everything that isn't a plain URL-safe character, so a link can sit inside another link's ?url= value.

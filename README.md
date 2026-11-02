@@ -1,11 +1,11 @@
 # Decrypt.team for iOS
 
-Native app for [Decrypt.team](https://decrypt.team): search the apps in your repos, see their versions, download or hand them to a sideloader, and open the website's Studio (decrypt + inject on the server) inside the app.
+Native app for [Decrypt.team](https://decrypt.team): search the apps in your repos, see their versions, download or hand them to a sideloader, and decrypt and inject on the server, all in native screens. The app uses the server only as a backend; it shows no website.
 
 - **Home** (native): featured tools, search across your repos, changelog and live platform stats from the site.
 - **Apps / Repos / Settings** (native): browse every app in your repos, add repos, set the server address. `https://delvek.net/repo.json` is the starting repo.
 - **App page** (native): versions, saved dylibs and frameworks, store info, **Tools** (server plugins such as Load Commands and Strings), download or hand to a sideloader.
-- **Decrypt & Inject**: opens the site's Studio for that app in a sheet (builds run on the server). A native version of this screen is next.
+- **Decrypt & Inject**: a native screen. Pick the source (the repo's IPA, or the App Store version if it's newer), choose the inject path and folder, add your own .dylib, and the server builds it. dtx.dylib is always injected. Then download the IPA, copy the link, or open it in a sideloader.
 - **Sign in**: the site's login in a sheet; the app then uses the same session.
 
 ## Build an unsigned IPA on GitHub

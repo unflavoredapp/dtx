@@ -11,7 +11,7 @@ struct SettingsView: View {
                     TextField("https://decrypt.team", text: $store.server)
                         .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                 } header: { Text("Server") } footer: {
-                    Text("Builds run on this server. The Studio tab opens it and uses your sign-in there.")
+                    Text("Decrypting and building run on this server. The app shows its own screens and only talks to the server.")
                 }
                 Section("Account") {
                     LabeledContent("Signed in as", value: session.username ?? "")

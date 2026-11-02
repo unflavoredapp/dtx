@@ -1,6 +1,5 @@
 import Foundation
 import SwiftUI
-import WebKit
 
 enum ApiError: LocalizedError {
     case bad, server(String, Int)
@@ -70,7 +69,6 @@ final class Session: ObservableObject {
     @Published var username: String?
     @Published var beta = false
     @Published var checked = false
-    @Published var showLogin = false
     @Published var phase: LoginPhase = .idle
 
     var signedIn: Bool { username != nil }
@@ -83,19 +81,6 @@ final class Session: ObservableObject {
         username = me?.user?.username
         beta = me?.user?.beta ?? false
         checked = true
-    }
-
-    /// Copies the sign-in made in the web sheet into the cookie store the app's own requests use.
-    func syncCookies() async {
-        let cookies = await WKWebsiteDataStore.default().httpCookieStore.allCookies()
-        for c in cookies { HTTPCookieStorage.shared.setCookie(c) }
-        await refresh()
-    }
-
-    /// The reverse: the app's own sign-in (Telegram) is handed to the Studio web view.
-    private func shareCookiesWithWeb() async {
-        let store = WKWebsiteDataStore.default().httpCookieStore
-        for c in HTTPCookieStorage.shared.cookies ?? [] { await store.setCookie(c) }
     }
 
     /// Telegram login: the server makes a token, Telegram opens on the bot, and the app polls until the person confirms there.
@@ -115,7 +100,6 @@ final class Session: ObservableObject {
                     let q = st.token.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? st.token
                     let p: TgPoll = try await Api.shared.get("/api/auth/telegram/poll?token=" + q)
                     if p.status == "done" {
-                        await self.shareCookiesWithWeb()
                         await self.refresh()
                         self.phase = self.allowed ? .idle : .denied("This account isn't on the Decrypt.Team staff list.")
                         return
@@ -138,8 +122,6 @@ final class Session: ObservableObject {
     func signOut() async {
         _ = try? await Api.shared.request("POST", "/api/auth/logout", json: [String: Any]())
         for c in HTTPCookieStorage.shared.cookies ?? [] { HTTPCookieStorage.shared.deleteCookie(c) }
-        let store = WKWebsiteDataStore.default().httpCookieStore
-        for c in await store.allCookies() { await store.deleteCookie(c) }
         username = nil; beta = false; phase = .idle
     }
 }

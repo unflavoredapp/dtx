@@ -34,19 +34,25 @@ final class RepoStore: ObservableObject {
         var all: [AppEntry] = []
         var names: [String: String] = [:]
         var failed = 0
-        await withTaskGroup(of: (RepoInfo, RepoFile?).self) { group in
+        // Downloading, decoding and building the entries all happen off the main thread, so a huge repo doesn't freeze the app.
+        await withTaskGroup(of: (RepoInfo, String?, [AppEntry]?).self) { group in
             for r in repos {
-                group.addTask { (r, try? await Self.fetch(r.url)) }
+                group.addTask {
+                    guard let file = try? await Self.fetch(r.url) else { return (r, nil, nil) }
+                    let n = file.name ?? r.name
+                    return (r, n, file.apps.map { Self.entry($0, repo: r, repoName: n) })
+                }
             }
-            for await (r, file) in group {
-                guard let file else { failed += 1; continue }
-                names[r.url] = file.name ?? r.name
-                all += file.apps.map { Self.entry($0, repo: r, repoName: file.name ?? r.name) }
+            for await (r, n, list) in group {
+                guard let list, let n else { failed += 1; continue }
+                names[r.url] = n
+                all += list
             }
         }
         for i in repos.indices { if let n = names[repos[i].url], !n.isEmpty { repos[i].name = n } }
         save()
-        apps = all.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        let merged = all
+        apps = await Task.detached(priority: .userInitiated) { merged.sorted { $0.key < $1.key } }.value
         if failed > 0 { message = failed == 1 ? "One repo couldn't be loaded." : "\(failed) repos couldn't be loaded." }
         loading = false
     }
@@ -76,7 +82,7 @@ final class RepoStore: ObservableObject {
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         let (data, resp) = try await URLSession.shared.data(for: req)
         if let h = resp as? HTTPURLResponse, !(200..<300).contains(h.statusCode) { throw RepoError.http(h.statusCode) }
-        guard data.count < 30_000_000 else { throw RepoError.notARepo }
+        guard data.count < 120_000_000 else { throw RepoError.notARepo }
         return try JSONDecoder().decode(RepoFile.self, from: data)
     }
 
@@ -89,7 +95,8 @@ final class RepoStore: ObservableObject {
         }
         vs.sort { compareVersions($0.version, $1.version) > 0 }
         return AppEntry(name: a.name, bid: a.bundleIdentifier, developer: a.developerName ?? "",
-                        icon: Self.https(a.iconURL), versions: vs, repoName: repoName, repoURL: repo.url)
+                        icon: Self.https(a.iconURL), versions: vs, repoName: repoName, repoURL: repo.url,
+                        key: (a.name + "\n" + a.bundleIdentifier + "\n" + (a.developerName ?? "")).lowercased())
     }
 
     nonisolated static func https(_ s: String?) -> URL? {

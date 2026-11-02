@@ -123,6 +123,8 @@ struct AppEntry: Identifiable, Hashable {
     let versions: [AppVersion]
     let repoName: String
     let repoURL: String
+    /// Lower-cased name, bundle ID and developer, made once so searching 17,000 apps stays fast. Also the sort order.
+    let key: String
     var current: AppVersion? { versions.first }
 }
 

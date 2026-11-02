@@ -26,13 +26,7 @@ struct SearchView: View {
     @EnvironmentObject var store: RepoStore
     @State private var query = ""
 
-    private var results: [AppEntry] {
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return store.apps }
-        return store.apps.filter {
-            $0.name.lowercased().contains(q) || $0.bid.lowercased().contains(q) || $0.developer.lowercased().contains(q)
-        }
-    }
+    @StateObject private var searcher = AppSearcher()
 
     var body: some View {
         NavigationStack {
@@ -52,7 +46,7 @@ struct SearchView: View {
                 }
                 if let m = store.message { Section { Text(m).foregroundStyle(.secondary) } }
                 Section {
-                    ForEach(results) { app in
+                    ForEach(searcher.shown) { app in
                         NavigationLink(value: app) {
                             HStack(spacing: 12) {
                                 AppIconView(url: app.icon, name: app.name)
@@ -64,8 +58,13 @@ struct SearchView: View {
                             }
                         }
                     }
+                    if searcher.hasMore {
+                        // the next 10 load when this row scrolls into view
+                        HStack { Spacer(); ProgressView(); Spacer() }.onAppear { searcher.loadMore() }
+                    }
                 } footer: {
-                    if !store.loading && results.isEmpty { Text("No apps found in your repos.") }
+                    if !store.loading && !searcher.searching && searcher.shown.isEmpty { Text("No apps found in your repos.") }
+                    else if searcher.total > 0 { Text("Showing \(searcher.shown.count) of \(formatCount(Int64(searcher.total)))") }
                 }
             }
             .overlay { if store.loading && store.apps.isEmpty { ProgressView() } }
@@ -73,6 +72,9 @@ struct SearchView: View {
             .navigationDestination(for: AppEntry.self) { AppDetailView(app: $0) }
             .searchable(text: $query, prompt: "Search apps in your repos")
             .refreshable { await store.refresh() }
+            .task { searcher.update(query: query, apps: store.apps) }
+            .onChange(of: query) { _ in searcher.update(query: query, apps: store.apps) }
+            .onChange(of: store.loading) { _ in searcher.update(query: query, apps: store.apps) }
         }
     }
 }

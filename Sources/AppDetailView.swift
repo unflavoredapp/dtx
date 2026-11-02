@@ -13,15 +13,7 @@ struct AppDetailView: View {
     @State private var sets: [SavedSet] = []
     @State private var setID = ""
     @State private var loaded = false
-    @State private var studio: IdentifiedURL?
-
-    private let sideloaders: [(String, (String) -> String)] = [
-        ("Feather", { "feather://install/" + $0 }),
-        ("E-Sign", { "esign://install?url=" + $0.urlEncoded }),
-        ("GBox", { "gbox://install?url=" + $0.urlEncoded }),
-        ("FlareStore", { "flarestore://install?url=" + $0.urlEncoded }),
-        ("AltStore", { "altstore://install?url=" + $0.urlEncoded }),
-    ]
+    @State private var showBuild = false
 
     private var curSet: SavedSet? { sets.first { $0.id == setID } ?? sets.first }
     private var items: [SetItem] { curSet?.items ?? [] }
@@ -53,7 +45,7 @@ struct AppDetailView: View {
         .navigationTitle(app.name)
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
-        .sheet(item: $studio) { StudioSheet(url: $0.url).ignoresSafeArea() }
+        .navigationDestination(isPresented: $showBuild) { BuildScreen(app: app, storeInfo: storeInfo) }
     }
 
     // MARK: header
@@ -152,11 +144,7 @@ struct AppDetailView: View {
     // MARK: actions and versions
 
     private var actions: some View {
-        Button {
-            let bid = app.bid.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? app.bid
-            let repo = app.repoURL.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-            if let u = URL(string: Api.shared.base + "/studio/inject/" + bid + "?repo=" + repo) { studio = IdentifiedURL(url: u) }
-        } label: {
+        Button { showBuild = true } label: {
             Label("Decrypt & Inject", systemImage: "wand.and.stars").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
         }
         .buttonStyle(.borderedProminent).tint(.dtAccent)
@@ -177,7 +165,7 @@ struct AppDetailView: View {
                         HStack {
                             Button("Download IPA") { openURL(u) }.buttonStyle(.bordered).tint(.dtAccent)
                             Menu("Install with…") {
-                                ForEach(sideloaders, id: \.0) { s in
+                                ForEach(Sideloaders.all, id: \.0) { s in
                                     Button(s.0) { if let l = URL(string: s.1(u.absoluteString)) { openURL(l) } }
                                 }
                             }.buttonStyle(.bordered).tint(.dtAccent)
@@ -229,10 +217,6 @@ struct ToolsPanel: View {
             } else if list.isEmpty {
                 Text("No tools are installed on this server.").foregroundStyle(.secondary)
             } else {
-                if !session.signedIn {
-                    Button { session.showLogin = true } label: { Label("Sign in to run tools", systemImage: "person").font(.subheadline.weight(.semibold)) }
-                        .buttonStyle(.bordered).tint(.dtAccent)
-                }
                 ForEach(list) { p in ToolRow(plugin: p, url: url) }
             }
         }

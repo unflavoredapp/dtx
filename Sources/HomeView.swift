@@ -6,14 +6,10 @@ struct HomeView: View {
     @State private var query = ""
     @State private var stats: Stats?
     @State private var entry: ChangelogReply.Entry?
-    @State private var page: IdentifiedURL?
+    @State private var showChangelog = false
     @FocusState private var focus: Bool
 
-    private var results: [AppEntry] {
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        guard q.count >= 2 else { return [] }
-        return store.apps.filter { $0.name.lowercased().contains(q) || $0.bid.lowercased().contains(q) || $0.developer.lowercased().contains(q) }
-    }
+    @StateObject private var searcher = AppSearcher()
 
     var body: some View {
         NavigationStack {
@@ -38,9 +34,11 @@ struct HomeView: View {
             .background(Color.dtBG)
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: AppEntry.self) { AppDetailView(app: $0) }
-            .task { await load() }
+            .task { searcher.minChars = 2; await load() }
+            .onChange(of: query) { _ in searcher.update(query: query, apps: store.apps) }
+            .onChange(of: store.loading) { _ in searcher.update(query: query, apps: store.apps) }
             .refreshable { await load(); await store.refresh() }
-            .sheet(item: $page) { SafariSheet(url: $0.url).ignoresSafeArea() }
+            .sheet(isPresented: $showChangelog) { ChangelogView() }
         }
     }
 
@@ -54,12 +52,11 @@ struct HomeView: View {
                 Text("iOS app discovery and decryption tools").font(.caption2).foregroundStyle(.secondary).lineLimit(2)
             }
             Spacer(minLength: 6)
-            Button {
-                if session.signedIn { session.showLogin = true } else { session.showLogin = true }
+            Menu {
+                Text("Signed in as " + (session.username ?? ""))
+                Button("Sign out", role: .destructive) { Task { await session.signOut() } }
             } label: {
-                VStack(alignment: .trailing, spacing: 1) {
-                    Label(session.username ?? "Sign in", systemImage: "person").font(.subheadline.weight(.semibold)).foregroundStyle(Color.dtAccent)
-                }
+                Label(session.username ?? "Account", systemImage: "person").font(.subheadline.weight(.semibold)).foregroundStyle(Color.dtAccent)
             }
         }
         .padding(.top, 8)
@@ -72,18 +69,18 @@ struct HomeView: View {
             HStack {
                 Text("Featured Tools").font(.title3.bold())
                 Spacer()
-                Button("See all ›") { open("/tools") }.font(.subheadline.weight(.semibold)).foregroundStyle(Color.dtAccent)
+                Button("Open apps ›") { store.tab = .search }.font(.subheadline.weight(.semibold)).foregroundStyle(Color.dtAccent)
             }
             HStack(spacing: 10) {
-                toolCard("App requests", "Request any app or tweak", "square.and.pencil", [.blue, .cyan], nil, "/requests")
-                toolCard("Decrypt Dylib", "Our dylib decrypt reconstruction", "lock.open.fill", [.orange, .red], "EXCLUSIVE", "/dylib")
-                toolCard("Updates", "Check for the latest app versions", "arrow.triangle.2.circlepath", [.blue, .indigo], nil, "/changelog")
+                toolCard("Find apps", "Search every repo you added", "magnifyingglass", [.blue, .cyan], nil) { store.tab = .search }
+                toolCard("Decrypt & Inject", "Build an IPA with dtx.dylib on the server", "lock.open.fill", [.orange, .red], "EXCLUSIVE") { store.tab = .search }
+                toolCard("Updates", "What's new in Decrypt.Team", "arrow.triangle.2.circlepath", [.blue, .indigo], nil) { showChangelog = true }
             }
         }
     }
 
-    private func toolCard(_ title: String, _ sub: String, _ icon: String, _ colors: [Color], _ badge: String?, _ path: String) -> some View {
-        Button { open(path) } label: {
+    private func toolCard(_ title: String, _ sub: String, _ icon: String, _ colors: [Color], _ badge: String?, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) { 
             VStack(spacing: 6) {
                 Image(systemName: icon).font(.system(size: 26, weight: .semibold)).foregroundStyle(.white)
                     .frame(width: 58, height: 58)
@@ -101,10 +98,6 @@ struct HomeView: View {
             .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Color.dtLine))
         }
         .buttonStyle(.plain)
-    }
-
-    private func open(_ path: String) {
-        if let u = URL(string: Api.shared.base + path) { page = IdentifiedURL(url: u) }
     }
 
     // MARK: search
@@ -140,12 +133,16 @@ struct HomeView: View {
     }
 
     private var resultsList: some View {
-        VStack(spacing: 0) {
-            if results.isEmpty {
-                Text(query.trimmingCharacters(in: .whitespaces).count < 2 ? "Type an app name to search your repos." : "No apps found in your repos.")
-                    .foregroundStyle(.secondary).padding(.vertical, 30)
+        LazyVStack(spacing: 0) {
+            if searcher.shown.isEmpty {
+                if searcher.searching {
+                    ProgressView().padding(.vertical, 30)
+                } else {
+                    Text(query.trimmingCharacters(in: .whitespaces).count < 2 ? "Type an app name to search your repos." : "No apps found in your repos.")
+                        .foregroundStyle(.secondary).padding(.vertical, 30)
+                }
             }
-            ForEach(results) { app in
+            ForEach(searcher.shown) { app in
                 NavigationLink(value: app) {
                     HStack(spacing: 12) {
                         AppIconView(url: app.icon, name: app.name, size: 48)
@@ -158,7 +155,13 @@ struct HomeView: View {
                     }
                     .padding(.vertical, 10)
                 }
-                if app.id != results.last?.id { Divider().overlay(Color.dtLine) }
+                Divider().overlay(Color.dtLine)
+            }
+            if searcher.hasMore {
+                // the next 10 load when this row scrolls into view
+                ProgressView().padding(.vertical, 14).onAppear { searcher.loadMore() }
+            } else if searcher.total > 0 {
+                Text("\(formatCount(Int64(searcher.total))) result\(searcher.total == 1 ? "" : "s")").font(.footnote).foregroundStyle(.secondary).padding(.top, 10)
             }
         }
         .card()
@@ -193,7 +196,7 @@ struct HomeView: View {
                     }
                     Divider().overlay(Color.dtLine)
                 }
-                Button { open("/changelog") } label: {
+                Button { showChangelog = true } label: {
                     Label("View Full Changelog", systemImage: "doc.text").font(.subheadline.weight(.semibold)).foregroundStyle(Color.dtAccent)
                 }
             } else {
