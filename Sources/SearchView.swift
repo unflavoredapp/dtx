@@ -31,6 +31,16 @@ struct SearchView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    HStack(spacing: 10) {
+                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                        TextField("Search apps in your repos…", text: $query)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        if !query.isEmpty { Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain) }
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 13).glowCapsule(strong: true)
+                    .listRowBackground(Color.clear).listRowSeparator(.hidden)
+                }
                 if store.onlyDefault {
                     Section {
                         HStack {
@@ -69,9 +79,8 @@ struct SearchView: View {
             }
             .overlay { if store.loading && store.apps.isEmpty { ProgressView() } }
             .scrollContentBackground(.hidden).background(AppBackground())
-            .navigationTitle("Decrypt.team")
             .navigationDestination(for: AppEntry.self) { AppDetailView(app: $0) }
-            .searchable(text: $query, prompt: "Search apps in your repos")
+            .withTopBar("Apps")
             .refreshable { await store.refresh() }
             .task { searcher.update(query: query, apps: store.apps) }
             .onChange(of: query) { _ in searcher.update(query: query, apps: store.apps) }

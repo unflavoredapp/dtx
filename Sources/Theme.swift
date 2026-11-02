@@ -32,11 +32,24 @@ struct GlowCapsule: ViewModifier {
     func body(content: Content) -> some View {
         content
             .background(Capsule().fill(Color.black.opacity(0.55)).background(.ultraThinMaterial, in: Capsule()))
-            .overlay(Capsule().stroke(LinearGradient(colors: [Color.dtAccent.opacity(strong ? 0.9 : 0.55), Color.dtAccent.opacity(0.15), Color.dtAccent.opacity(strong ? 0.7 : 0.35)], startPoint: .leading, endPoint: .trailing), lineWidth: strong ? 1.5 : 1))
+            .overlay(Capsule().stroke(LinearGradient(colors: [Color.dtAccent.opacity(strong ? 0.9 : 0.55), Color.dtAccent.opacity(0.15), Color.dtAccent.opacity(strong ? 0.7 : 0.35)], startPoint: .leading, endPoint: .trailing), lineWidth: 1))
             .shadow(color: Color.dtAccent.opacity(strong ? 0.35 : 0.2), radius: strong ? 16 : 10)
     }
 }
 extension View { func glowCapsule(strong: Bool = false) -> some View { modifier(GlowCapsule(strong: strong)) } }
+
+/// Neutral dark glass for the top and bottom bars.
+struct GlassPanel: ViewModifier {
+    var radius: CGFloat = 28
+    func body(content: Content) -> some View {
+        content
+            .background(RoundedRectangle(cornerRadius: radius, style: .continuous).fill(Color.black.opacity(0.4))
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: radius, style: .continuous)))
+            .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).stroke(Color.white.opacity(0.14), lineWidth: 1))
+            .shadow(color: .black.opacity(0.45), radius: 12, y: 4)
+    }
+}
+extension View { func glassPanel(radius: CGFloat = 28) -> some View { modifier(GlassPanel(radius: radius)) } }
 
 /// Near-black with soft orange glows, behind every screen.
 struct AppBackground: View {
@@ -45,6 +58,15 @@ struct AppBackground: View {
             Color.dtBG
             RadialGradient(colors: [Color.dtAccent.opacity(0.22), .clear], center: .topTrailing, startRadius: 10, endRadius: 420)
             RadialGradient(colors: [Color.dtAccent.opacity(0.16), .clear], center: .bottomLeading, startRadius: 10, endRadius: 460)
+            // a very faint grid, like a blueprint
+            Canvas { ctx, size in
+                var path = Path()
+                var x: CGFloat = 0
+                while x <= size.width { path.move(to: CGPoint(x: x, y: 0)); path.addLine(to: CGPoint(x: x, y: size.height)); x += 38 }
+                var y: CGFloat = 0
+                while y <= size.height { path.move(to: CGPoint(x: 0, y: y)); path.addLine(to: CGPoint(x: size.width, y: y)); y += 38 }
+                ctx.stroke(path, with: .color(Color.white.opacity(0.035)), lineWidth: 0.5)
+            }
         }
         .ignoresSafeArea()
     }

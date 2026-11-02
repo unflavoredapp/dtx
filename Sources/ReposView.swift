@@ -32,8 +32,7 @@ struct ReposView: View {
                 }
             }
             .scrollContentBackground(.hidden).background(AppBackground())
-            .navigationTitle("Repos")
-            .toolbar { EditButton() }
+            .withTopBar("Repos")
         }
     }
 

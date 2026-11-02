@@ -17,7 +17,6 @@ struct HomeView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 18) {
-                    header
                     if query.trimmingCharacters(in: .whitespaces).isEmpty {
                         hero
                         tools
@@ -38,7 +37,7 @@ struct HomeView: View {
                 .padding(.horizontal, 14).padding(.bottom, 24)
             }
             .background(AppBackground())
-            .toolbar(.hidden, for: .navigationBar)
+            .withTopBar()
             .navigationDestination(for: AppEntry.self) { AppDetailView(app: $0) }
             .task { searcher.minChars = 2; await load() }
             .onChange(of: query) { _ in searcher.update(query: query, apps: store.apps) }
@@ -47,40 +46,6 @@ struct HomeView: View {
             .sheet(isPresented: $showChangelog) { ChangelogView() }
             .sheet(isPresented: $showActivity) { ActivityView(items: recent) }
         }
-    }
-
-    // MARK: floating header
-
-    private var header: some View {
-        HStack(spacing: 12) {
-            Image("Logo").resizable().frame(width: 50, height: 50)
-                .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(Color.dtAccent.opacity(0.5)))
-            VStack(alignment: .leading, spacing: 1) {
-                (Text("Decrypt.").foregroundColor(.white) + Text("Team").foregroundColor(.dtAccent)).font(.title3.weight(.heavy))
-                Text("iOS app discovery, decryption and injection tools").font(.caption2).foregroundStyle(.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 4)
-            Rectangle().fill(Color.dtLine).frame(width: 1, height: 38)
-            Menu {
-                Text("Signed in as " + (session.username ?? ""))
-                Button("Sign out", role: .destructive) { Task { await session.signOut() } }
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "person").foregroundStyle(Color.dtAccent)
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(session.username ?? "Account").font(.caption.weight(.bold)).foregroundStyle(.white).lineLimit(1)
-                        Text(session.staff ? "STAFF" : "BETA").font(.system(size: 10, weight: .heavy)).foregroundStyle(Color.dtAccent)
-                    }
-                    Image(systemName: "chevron.down").font(.caption2).foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 10).padding(.vertical, 8)
-                .glowCapsule()
-            }
-        }
-        .padding(.horizontal, 12).padding(.vertical, 10)
-        .glowCapsule(strong: true)
-        .padding(.top, 6)
     }
 
     // MARK: hero banner (swipe for more)
@@ -101,25 +66,25 @@ struct HomeView: View {
                 ForEach(Array(slides.enumerated()), id: \.offset) { i, s in
                     HStack(spacing: 8) {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text(s.title).font(.title2.weight(.heavy)).foregroundStyle(.white).fixedSize(horizontal: false, vertical: true)
-                            Text(s.text).font(.subheadline).foregroundStyle(.white.opacity(0.7)).fixedSize(horizontal: false, vertical: true)
+                            Text(s.title).font(.system(size: 20, weight: .heavy)).foregroundStyle(.white).lineLimit(2).minimumScaleFactor(0.85).fixedSize(horizontal: false, vertical: true)
+                            Text(s.text).font(.system(size: 13)).foregroundStyle(.white.opacity(0.7)).lineLimit(3).fixedSize(horizontal: false, vertical: true)
                             Spacer(minLength: 4)
                             Button(action: s.action) {
-                                HStack(spacing: 6) { Text(s.button).font(.headline); Image(systemName: "chevron.right").font(.subheadline.weight(.bold)) }
-                                    .foregroundStyle(.white).padding(.horizontal, 18).padding(.vertical, 10)
+                                HStack(spacing: 6) { Text(s.button).font(.system(size: 15, weight: .bold)); Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold)) }
+                                    .foregroundStyle(.white).padding(.horizontal, 16).padding(.vertical, 9)
                                     .background(Capsule().fill(LinearGradient(colors: [Color.dtAccent, Color(red: 0.95, green: 0.4, blue: 0.05)], startPoint: .top, endPoint: .bottom)))
                                     .shadow(color: Color.dtAccent.opacity(0.5), radius: 10)
                             }
                         }
                         Spacer(minLength: 0)
-                        heroArt(s.icon)
+                        heroArt(s.icon).scaleEffect(0.85)
                     }
-                    .padding(18).padding(.bottom, 8)
+                    .padding(.horizontal, 16).padding(.vertical, 16)
                     .tag(i)
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
-            .frame(height: 178)
+            .frame(height: 196)
             .background(RoundedRectangle(cornerRadius: 26, style: .continuous).fill(LinearGradient(colors: [Color.dtAccent.opacity(0.18), Color.black.opacity(0.45)], startPoint: .topTrailing, endPoint: .bottomLeading)))
             .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(LinearGradient(colors: [Color.dtAccent.opacity(0.9), Color.dtAccent.opacity(0.2)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1.5))
             .shadow(color: Color.dtAccent.opacity(0.3), radius: 16)
@@ -143,7 +108,7 @@ struct HomeView: View {
             }
             Image(systemName: icon).font(.system(size: 36, weight: .bold)).foregroundStyle(.white).shadow(color: Color.dtAccent, radius: 8)
         }
-        .frame(width: 118, height: 118)
+        .frame(width: 104, height: 104)
         .shadow(color: Color.dtAccent.opacity(0.4), radius: 14)
     }
 
