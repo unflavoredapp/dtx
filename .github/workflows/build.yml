@@ -1,0 +1,57 @@
+name: Build unsigned IPA
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate the Xcode project
+        run: xcodegen generate
+
+      - name: Build (no signing)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project DecryptTeam.xcodeproj \
+            -scheme DecryptTeam \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            clean build | tail -n 60
+
+      - name: Package the IPA
+        run: |
+          APP=$(find build/Build/Products -maxdepth 2 -name "DecryptTeam.app" | head -n 1)
+          test -d "$APP"
+          rm -rf Payload DecryptTeam.ipa
+          mkdir Payload
+          cp -R "$APP" Payload/
+          zip -qry DecryptTeam.ipa Payload
+          ls -lh DecryptTeam.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DecryptTeam-unsigned-ipa
+          path: DecryptTeam.ipa
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: DecryptTeam.ipa
