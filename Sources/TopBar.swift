@@ -14,15 +14,31 @@ struct TopBar: View {
 
     var body: some View {
         VStack(spacing: 8) {
+            bar
+            HStack(spacing: 6) {
+                Image(systemName: "infinity").font(.system(size: 13, weight: .semibold))
+                Text("Unlimited").fontWeight(.bold)
+                Text("· decrypt, inject and build").foregroundStyle(.secondary)
+            }
+            .font(.system(size: 14)).foregroundStyle(.white.opacity(0.85))
+        }
+    }
+
+    private var bar: some View {
+        VStack(spacing: 8) {
             HStack(spacing: 12) {
-                Image("Logo").resizable().frame(width: 30, height: 30)
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                Button { store.closeSearch(); store.tab = .settings } label: { Image(systemName: "paintpalette.fill").font(.system(size: 20, weight: .semibold)) }
+                    .accessibilityLabel("Appearance and settings")
                 Spacer(minLength: 0)
-                Group {
-                    if let title { Text(title).foregroundColor(.white) }
-                    else { Text("Decrypt.").foregroundColor(.white) + Text("Team").foregroundColor(.dtAccent) }
+                HStack(spacing: 8) {
+                    Image("Logo").resizable().frame(width: 30, height: 30)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    Group {
+                        if let title { Text(title).foregroundColor(.white) }
+                        else { Text("Decrypt.").foregroundColor(.white) + Text("Team").foregroundColor(.dtAccent) }
+                    }
+                    .font(.system(size: 22, weight: .bold)).lineLimit(1).minimumScaleFactor(0.8)
                 }
-                .font(.system(size: 22, weight: .bold)).lineLimit(1).minimumScaleFactor(0.8)
                 Spacer(minLength: 0)
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
@@ -51,7 +67,7 @@ struct TopBar: View {
                                 .foregroundStyle(Color.dtYellow).lineLimit(1).frame(maxWidth: 130, alignment: .leading)
                             Text(session.staff ? "STAFF" : "BETA").font(.system(size: 10, weight: .heavy, design: .monospaced)).foregroundStyle(Color.dtAccent)
                         }
-                        Image(systemName: "chevron.up.chevron.down").font(.system(size: 10, weight: .bold)).foregroundStyle(.secondary)
+                        Image(systemName: "chevron.down").font(.system(size: 14, weight: .bold)).foregroundStyle(.white)
                     }
                     .padding(.leading, 6).padding(.trailing, 12).padding(.vertical, 5)
                     .background(Capsule().fill(Color.white.opacity(0.07)))
@@ -59,7 +75,7 @@ struct TopBar: View {
             }
             .padding(.horizontal, 8).padding(.vertical, 6)
             .frame(maxWidth: .infinity)
-            .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color.white.opacity(0.05)))
+            .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color.black.opacity(0.35)))
 
             if open {
                 HStack(spacing: 10) {
