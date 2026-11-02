@@ -1,15 +1,18 @@
 import SwiftUI
 
-/// The tab bar at the bottom: five equal tabs on one glass capsule. The middle one, Decrypt, opens the build picker.
+/// The tab bar at the bottom: five equal tabs on one glass capsule. Home sits in the middle.
 struct FloatingTabBar: View {
     @EnvironmentObject var store: RepoStore
 
+    /// The signature symbol (iOS 17 and later); older systems get a pencil.
+    private static let signedIcon = UIImage(systemName: "signature") != nil ? "signature" : "pencil.and.scribble"
+
     var body: some View {
         HStack(spacing: 0) {
+            item("Browse", "circle.grid.3x3.fill", on: store.tab == .repos) { store.tab = .repos }
+            item("Library", "square.grid.2x2.fill", on: store.tab == .search) { store.tab = .search }
             item("Home", "house.fill", on: store.tab == .home) { store.tab = .home }
-            item("Apps", "square.grid.2x2.fill", on: store.tab == .search) { store.tab = .search }
-            item("Decrypt", "lock.fill", on: store.showQuickBuild) { store.showQuickBuild = true }
-            item("Repos", "square.stack.3d.up.fill", on: store.tab == .repos) { store.tab = .repos }
+            item("Signed", Self.signedIcon, on: store.tab == .signed) { store.tab = .signed }
             item("Settings", "gearshape.fill", on: store.tab == .settings) { store.tab = .settings }
         }
         .padding(.horizontal, 6).padding(.vertical, 10)

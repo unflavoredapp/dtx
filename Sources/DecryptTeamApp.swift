@@ -46,6 +46,7 @@ struct RootView: View {
             screen(.home) { HomeView() }
             screen(.search) { SearchView() }
             screen(.repos) { ReposView() }
+            screen(.signed) { SignedView() }
             screen(.settings) { SettingsView() }
             FloatingTabBar()
         }

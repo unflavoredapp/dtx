@@ -134,7 +134,8 @@ struct RepoInfo: Codable, Identifiable, Hashable {
     var name: String
 }
 
-enum AppTab: Hashable { case home, search, repos, settings }
+/// search = Library (every app in your sources), repos = Browse (the sources list), signed = what you built.
+enum AppTab: Hashable { case home, search, repos, signed, settings }
 
 func compareVersions(_ a: String, _ b: String) -> Int {
     func parts(_ s: String) -> [Int] { s.split(whereSeparator: { !$0.isNumber }).map { Int($0) ?? 0 } }

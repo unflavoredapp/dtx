@@ -181,6 +181,14 @@ final class BuildModel: ObservableObject {
                 outLink = out.url.flatMap { URL(string: $0) }
                 added = (out.loads ?? []).compactMap { $0.name }
                 pct = 1; stage = .done; message = "Build completed"
+                if let link = outLink {
+                    SignedStore.shared.add(SignedEntry(
+                        id: jobID.isEmpty ? UUID().uuidString : jobID,
+                        name: o.name.isEmpty ? app.name : o.name,
+                        bid: o.bid.isEmpty ? app.bid : o.bid,
+                        version: source.version.isEmpty ? (app.current?.version ?? "") : source.version,
+                        icon: app.icon?.absoluteString, date: Date(), link: link.absoluteString, size: outSize))
+                }
                 return
             }
             message = j.msg ?? "Working…"; pct = Double(j.pct ?? 0) / 100; queue = j.queue ?? 0

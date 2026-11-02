@@ -1,27 +1,40 @@
 import SwiftUI
 
-/// The bar at the top of every main screen: a glass panel with the logo, the screen's title, search and build buttons,
-/// and your account on a second row. The search button opens a field right under the bar, with results dropping down.
+/// What can sit on the right of the top bar.
+enum BarAction {
+    case search                         // opens the search field under the bar
+    case lock                           // starts a Decrypt & Inject
+    case icon(String, () -> Void)
+    case text(String, () -> Void)
+    case label(String)                  // plain text, not a button
+}
+
+/// The bar at the top of every main screen: palette on the left, the screen's title in the middle, actions on the right,
+/// and a second row with a short line of text (like a count) and your account.
 struct TopBar: View {
     @EnvironmentObject var store: RepoStore
     @EnvironmentObject var session: Session
     let tab: AppTab
-    /// nil shows the Decrypt.Team name; any other text is the screen's title.
+    /// nil shows the Decrypt.Team name with the logo; any other text is the screen's title.
     var title: String? = nil
+    var strip: String? = nil
+    var actions: [BarAction] = []
     @FocusState private var focused: Bool
 
     private var open: Bool { store.searchOpen && store.tab == tab }
 
-    var body: some View { bar }
-
-    private var bar: some View {
+    var body: some View {
         VStack(spacing: 8) {
-            HStack(spacing: 12) {
-                Button { store.closeSearch(); store.tab = .settings } label: { Image(systemName: "paintpalette.fill").font(.system(size: 20, weight: .semibold)) }
-                    .accessibilityLabel("Appearance and settings")
-                Spacer(minLength: 0)
+            ZStack {
+                HStack(spacing: 14) {
+                    Button { store.closeSearch(); store.tab = .settings } label: { Image(systemName: "paintpalette.fill").font(.system(size: 20, weight: .semibold)) }
+                        .accessibilityLabel("Appearance and settings")
+                    Spacer(minLength: 0)
+                    ForEach(Array(actions.enumerated()), id: \.offset) { item in actionView(item.element) }
+                }
+                .foregroundStyle(Color.dtAccent)
                 HStack(spacing: 8) {
-                    if tab == .home {
+                    if title == nil {
                         Image("Logo").resizable().frame(width: 30, height: 30)
                             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
@@ -31,20 +44,12 @@ struct TopBar: View {
                     }
                     .font(.system(size: 22, weight: .bold)).lineLimit(1).minimumScaleFactor(0.8)
                 }
-                Spacer(minLength: 0)
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        if store.searchOpen { store.closeSearch() } else { store.searchOpen = true }
-                    }
-                } label: { Image(systemName: open ? "xmark" : "magnifyingglass").font(.system(size: 20, weight: .semibold)) }
-                    .accessibilityLabel("Search apps")
-                Button { store.showQuickBuild = true } label: { Image(systemName: "lock.fill").font(.system(size: 20, weight: .semibold)) }
-                    .accessibilityLabel("Start a build")
+                .allowsHitTesting(false)
             }
-            .foregroundStyle(Color.dtAccent)
             .padding(.horizontal, 6)
 
             HStack {
+                if let strip { Text(strip).font(.system(size: 20, weight: .semibold)).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7).padding(.leading, 8) }
                 Spacer()
                 Menu {
                     Text("Signed in as " + (session.username ?? ""))
@@ -87,6 +92,27 @@ struct TopBar: View {
         .glassPanel(radius: 30)
         .onChange(of: store.searchOpen) { isOpen in
             if isOpen && store.tab == tab { DispatchQueue.main.async { focused = true } } else { focused = false }
+        }
+    }
+
+    @ViewBuilder private func actionView(_ a: BarAction) -> some View {
+        switch a {
+        case .search:
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    if store.searchOpen { store.closeSearch() } else { store.searchOpen = true }
+                }
+            } label: { Image(systemName: open ? "xmark" : "magnifyingglass").font(.system(size: 20, weight: .semibold)) }
+                .accessibilityLabel("Search apps")
+        case .lock:
+            Button { store.showQuickBuild = true } label: { Image(systemName: "lock.fill").font(.system(size: 20, weight: .semibold)) }
+                .accessibilityLabel("Start a build")
+        case .icon(let name, let run):
+            Button(action: run) { Image(systemName: name).font(.system(size: 22, weight: .semibold)) }
+        case .text(let t, let run):
+            Button(action: run) { Text(t).font(.system(size: 19, weight: .semibold)) }
+        case .label(let t):
+            Text(t).font(.system(size: 15, design: .monospaced)).foregroundStyle(.secondary)
         }
     }
 }
@@ -143,6 +169,8 @@ struct TopBarHost: ViewModifier {
     @EnvironmentObject var store: RepoStore
     let tab: AppTab
     let title: String?
+    let strip: String?
+    let actions: [BarAction]
     @State private var barHeight: CGFloat = 140
 
     func body(content: Content) -> some View {
@@ -151,7 +179,7 @@ struct TopBarHost: ViewModifier {
             .safeAreaInset(edge: .top, spacing: 0) { Color.clear.frame(height: barHeight) }
             .overlay(alignment: .top) {
                 VStack(spacing: 8) {
-                    TopBar(tab: tab, title: title)
+                    TopBar(tab: tab, title: title, strip: strip, actions: actions)
                         .background(GeometryReader { g in Color.clear.preference(key: BarHeightKey.self, value: g.size.height + 10) })
                     if store.searchOpen && store.tab == tab { SearchDropdown(searcher: store.searcher) }
                     Spacer(minLength: 0)
@@ -165,5 +193,7 @@ struct TopBarHost: ViewModifier {
 
 extension View {
     /// Puts the shared top bar above a screen and hides the system navigation bar. Pushed screens keep their own.
-    func withTopBar(_ tab: AppTab, title: String? = nil) -> some View { modifier(TopBarHost(tab: tab, title: title)) }
+    func withTopBar(_ tab: AppTab, title: String? = nil, strip: String? = nil, actions: [BarAction]? = nil) -> some View {
+        modifier(TopBarHost(tab: tab, title: title, strip: strip, actions: actions ?? (tab == .home ? [.search, .lock] : [.search])))
+    }
 }
