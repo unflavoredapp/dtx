@@ -21,7 +21,7 @@ struct SettingsView: View {
                     row("doc.text.fill", "Changelog", "What changed in Decrypt.Team") { showChangelog = true }
 
                     header("ACCOUNT")
-                    row("person.fill", "Account", "\\(session.username ?? "") · \\(session.staff ? "Staff" : "Closed beta")") { confirmSignOut = true }
+                    row("person.fill", "Account", "\(session.username ?? "") · \(session.staff ? "Staff" : "Closed beta")") { confirmSignOut = true }
 
                     header("SERVER")
                     HStack(spacing: 14) {
@@ -39,7 +39,7 @@ struct SettingsView: View {
 
                     header("DATA")
                     row("arrow.clockwise", "Reload sources", "Fetch every repo again") { Task { await store.refresh() } }
-                    row("trash.fill", "Clear signed list", "\\(signed.items.count) build\\(signed.items.count == 1 ? "" : "s") on this phone") { confirmClear = true }
+                    row("trash.fill", "Clear signed list", "\(signed.items.count) build\(signed.items.count == 1 ? "" : "s") on this phone") { confirmClear = true }
                 }
                 .padding(.horizontal, 14).padding(.bottom, 24)
             }
@@ -47,7 +47,7 @@ struct SettingsView: View {
             .withTopBar(.settings, title: "Settings", actions: [.label("DECRYPT.TEAM " + version)])
             .sheet(isPresented: $showChangelog) { ChangelogView() }
             .sheet(isPresented: $showAbout) { aboutSheet }
-            .confirmationDialog("Sign out of \\(session.username ?? "this account")?", isPresented: $confirmSignOut, titleVisibility: .visible) {
+            .confirmationDialog("Sign out of \(session.username ?? "this account")?", isPresented: $confirmSignOut, titleVisibility: .visible) {
                 Button("Sign out", role: .destructive) { Task { await session.signOut() } }
             }
             .confirmationDialog("Remove every build from the Signed list?", isPresented: $confirmClear, titleVisibility: .visible) {
@@ -90,7 +90,7 @@ struct SettingsView: View {
             VStack(spacing: 14) {
                 Image("Logo").resizable().frame(width: 96, height: 96).clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous)).padding(.top, 24)
                 (Text("Decrypt.").foregroundColor(.white) + Text("Team").foregroundColor(.dtAccent)).font(.title.bold())
-                Text("Version \\(version)").foregroundStyle(.secondary)
+                Text("Version \(version)").foregroundStyle(.secondary)
                 Text("A closed-beta companion for Decrypt.Team staff. Decrypting and building run on the Decrypt.Team server; this app only shows the screens. Builds are unsigned, so sign them with your own certificate to install.")
                     .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.horizontal, 24)
                 Spacer()
