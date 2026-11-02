@@ -42,3 +42,10 @@ struct SafariSheet: UIViewControllerRepresentable {
 }
 
 struct IdentifiedURL: Identifiable { let url: URL; var id: String { url.absoluteString } }
+
+extension String {
+    /// Percent-encodes everything that isn't a plain URL-safe character, so a link can sit inside another link's ?url= value.
+    var urlEncoded: String {
+        addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")) ?? self
+    }
+}
