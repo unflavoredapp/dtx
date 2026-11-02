@@ -7,6 +7,7 @@ enum BarAction {
     case icon(String, () -> Void)
     case text(String, () -> Void)
     case label(String)                  // plain text, not a button
+    case menu(String, [(String, () -> Void)])   // an icon that opens a list of choices
 }
 
 /// The bar at the top of every main screen: palette on the left, the screen's title in the middle, actions on the right,
@@ -19,6 +20,10 @@ struct TopBar: View {
     var title: String? = nil
     var strip: String? = nil
     var actions: [BarAction] = []
+    /// On a pushed screen: the label of the back button (it replaces the palette), and an icon next to the title.
+    var back: String? = nil
+    var titleIcon: URL? = nil
+    @Environment(\.dismiss) private var dismiss
     @FocusState private var focused: Bool
 
     private var open: Bool { store.searchOpen && store.tab == tab }
@@ -27,8 +32,14 @@ struct TopBar: View {
         VStack(spacing: 8) {
             ZStack {
                 HStack(spacing: 14) {
-                    Button { store.closeSearch(); store.tab = .settings } label: { Image(systemName: "paintpalette.fill").font(.system(size: 20, weight: .semibold)) }
-                        .accessibilityLabel("Appearance and settings")
+                    if let back {
+                        Button { store.closeSearch(); dismiss() } label: {
+                            HStack(spacing: 4) { Image(systemName: "chevron.left").font(.system(size: 20, weight: .bold)); Text(back).font(.system(size: 22, weight: .semibold)) }
+                        }
+                    } else {
+                        Button { store.closeSearch(); store.tab = .settings } label: { Image(systemName: "paintpalette.fill").font(.system(size: 20, weight: .semibold)) }
+                            .accessibilityLabel("Appearance and settings")
+                    }
                     Spacer(minLength: 0)
                     ForEach(Array(actions.enumerated()), id: \.offset) { item in actionView(item.element) }
                 }
@@ -37,6 +48,8 @@ struct TopBar: View {
                     if title == nil {
                         Image("Logo").resizable().frame(width: 30, height: 30)
                             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    } else if let titleIcon {
+                        AppIconView(url: titleIcon, name: title ?? "", size: 36)
                     }
                     Group {
                         if let title { Text(title).foregroundColor(.white) }
@@ -113,6 +126,10 @@ struct TopBar: View {
             Button(action: run) { Text(t).font(.system(size: 19, weight: .semibold)) }
         case .label(let t):
             Text(t).font(.system(size: 15, design: .monospaced)).foregroundStyle(.secondary)
+        case .menu(let name, let items):
+            Menu {
+                ForEach(Array(items.enumerated()), id: \.offset) { item in Button(item.element.0, action: item.element.1) }
+            } label: { Image(systemName: name).font(.system(size: 22, weight: .semibold)) }
         }
     }
 }
@@ -171,6 +188,8 @@ struct TopBarHost: ViewModifier {
     let title: String?
     let strip: String?
     let actions: [BarAction]
+    let back: String?
+    let titleIcon: URL?
     @State private var barHeight: CGFloat = 140
 
     func body(content: Content) -> some View {
@@ -179,7 +198,7 @@ struct TopBarHost: ViewModifier {
             .safeAreaInset(edge: .top, spacing: 0) { Color.clear.frame(height: barHeight) }
             .overlay(alignment: .top) {
                 VStack(spacing: 8) {
-                    TopBar(tab: tab, title: title, strip: strip, actions: actions)
+                    TopBar(tab: tab, title: title, strip: strip, actions: actions, back: back, titleIcon: titleIcon)
                         .background(GeometryReader { g in Color.clear.preference(key: BarHeightKey.self, value: g.size.height + 10) })
                     if store.searchOpen && store.tab == tab { SearchDropdown(searcher: store.searcher) }
                     Spacer(minLength: 0)
@@ -193,7 +212,7 @@ struct TopBarHost: ViewModifier {
 
 extension View {
     /// Puts the shared top bar above a screen and hides the system navigation bar. Pushed screens keep their own.
-    func withTopBar(_ tab: AppTab, title: String? = nil, strip: String? = nil, actions: [BarAction]? = nil) -> some View {
-        modifier(TopBarHost(tab: tab, title: title, strip: strip, actions: actions ?? (tab == .home ? [.search, .lock] : [.search])))
+    func withTopBar(_ tab: AppTab, title: String? = nil, strip: String? = nil, actions: [BarAction]? = nil, back: String? = nil, titleIcon: URL? = nil) -> some View {
+        modifier(TopBarHost(tab: tab, title: title, strip: strip, actions: actions ?? (tab == .home ? [.search, .lock] : [.search]), back: back, titleIcon: titleIcon))
     }
 }

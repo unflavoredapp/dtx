@@ -33,7 +33,7 @@ struct ReposView: View {
                 .padding(.horizontal, 14).padding(.bottom, 24)
             }
             .background(AppBackground())
-            .navigationDestination(for: RepoInfo.self) { RepoAppsView(repo: $0) }
+            .navigationDestination(for: RepoInfo.self) { SourceBrowseView(repo: $0) }
             .navigationDestination(for: AppEntry.self) { AppDetailView(app: $0) }
             .withTopBar(.repos, title: "Sources", actions: [.search, .text(editing ? "Done" : "Edit", { withAnimation { editing.toggle() } }), .icon("plus", { showAdd = true })])
             .sheet(isPresented: $showAdd) { AddRepoView() }
@@ -57,31 +57,6 @@ struct ReposView: View {
             Spacer(minLength: 0)
         }
         .contentShape(Rectangle())
-    }
-}
-
-/// The apps inside one source, 20 at a time.
-struct RepoAppsView: View {
-    @EnvironmentObject var store: RepoStore
-    let repo: RepoInfo
-    @State private var apps: [AppEntry] = []
-    @State private var shown = 20
-
-    var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach(apps.prefix(shown)) { app in
-                    NavigationLink(value: app) { AppRow(app: app) }.buttonStyle(.plain)
-                    Divider().overlay(Color.dtLine)
-                }
-                if shown < apps.count { ProgressView().padding(.vertical, 14).onAppear { shown += 20 } }
-                if apps.isEmpty { Text(store.loading ? "Loading…" : "No apps in this source.").foregroundStyle(.secondary).padding(.top, 40) }
-            }
-            .padding(.horizontal, 14)
-        }
-        .background(AppBackground())
-        .navigationTitle(repo.name).navigationBarTitleDisplayMode(.inline)
-        .task(id: store.apps.count) { apps = store.apps.filter { $0.repoURL == repo.url } }
     }
 }
 

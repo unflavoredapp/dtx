@@ -8,6 +8,7 @@ final class RepoStore: ObservableObject {
 
     @Published var repos: [RepoInfo] = []
     @Published var apps: [AppEntry] = []
+    @Published var meta: [String: RepoMeta] = [:]
     @Published var loading = false
     @Published var message: String?
     @Published var tab: AppTab = .home
@@ -44,24 +45,30 @@ final class RepoStore: ObservableObject {
         loading = true; message = nil
         var all: [AppEntry] = []
         var names: [String: String] = [:]
+        var metas: [String: RepoMeta] = [:]
         var failed = 0
         // Downloading, decoding and building the entries all happen off the main thread, so a huge repo doesn't freeze the app.
-        await withTaskGroup(of: (RepoInfo, String?, [AppEntry]?).self) { group in
+        await withTaskGroup(of: (RepoInfo, String?, [AppEntry]?, RepoMeta?).self) { group in
             for r in repos {
                 group.addTask {
-                    guard let file = try? await Self.fetch(r.url) else { return (r, nil, nil) }
+                    guard let file = try? await Self.fetch(r.url) else { return (r, nil, nil, nil) }
                     let n = file.name ?? r.name
-                    return (r, n, file.apps.map { Self.entry($0, repo: r, repoName: n) })
+                    let m = RepoMeta(icon: Self.https(file.iconURL),
+                                     news: file.news.map { NewsItem(title: $0.title, caption: $0.caption ?? "", image: Self.https($0.imageURL), url: Self.https($0.url)) },
+                                     featured: file.featured)
+                    return (r, n, file.apps.map { Self.entry($0, repo: r, repoName: n) }, m)
                 }
             }
-            for await (r, n, list) in group {
+            for await (r, n, list, m) in group {
                 guard let list, let n else { failed += 1; continue }
                 names[r.url] = n
+                if let m { metas[r.url] = m }
                 all += list
             }
         }
         for i in repos.indices { if let n = names[repos[i].url], !n.isEmpty { repos[i].name = n } }
         save()
+        meta = metas
         let merged = all
         apps = await Task.detached(priority: .userInitiated) { merged.sorted { $0.key < $1.key } }.value
         if failed > 0 { message = failed == 1 ? "One repo couldn't be loaded." : "\(failed) repos couldn't be loaded." }
@@ -108,6 +115,8 @@ final class RepoStore: ObservableObject {
         vs.sort { compareVersions($0.version, $1.version) > 0 }
         return AppEntry(name: a.name, bid: a.bundleIdentifier, developer: a.developerName ?? "",
                         icon: Self.https(a.iconURL), versions: vs, repoName: repoName, repoURL: repo.url,
+                        subtitle: a.subtitle ?? "", category: (a.category ?? "").trimmingCharacters(in: .whitespaces),
+                        shots: a.shots.compactMap { Self.https($0) },
                         key: (a.name + "\n" + a.bundleIdentifier + "\n" + (a.developerName ?? "")).lowercased())
     }
 

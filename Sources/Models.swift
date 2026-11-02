@@ -24,17 +24,56 @@ extension KeyedDecodingContainer {
 
 // MARK: - AltStore / SideStore style repo file
 
+/// Screenshots come in several shapes: a list of links, a list of {imageURL}, or {iphone:[…], ipad:[…]}.
+struct ShotList: Decodable {
+    var urls: [String] = []
+    private struct Obj: Decodable { var imageURL: String?; var url: String? }
+    private struct Item: Decodable {
+        var value: String
+        init(from d: Decoder) throws {
+            if let s = try? d.singleValueContainer().decode(String.self) { value = s; return }
+            let o = try Obj(from: d)
+            guard let v = o.imageURL ?? o.url else { throw RepoError.notARepo }
+            value = v
+        }
+    }
+    private struct Devices: Decodable { var iphone: [Lossy<Item>]?; var ipad: [Lossy<Item>]? }
+    init(from decoder: Decoder) throws {
+        if let arr = try? [Lossy<Item>](from: decoder) { urls = arr.compactMap { $0.value?.value }; return }
+        if let dev = try? Devices(from: decoder) {
+            urls = ((dev.iphone ?? []) + (dev.ipad ?? [])).compactMap { $0.value?.value }
+        }
+    }
+}
+
+struct RepoNews: Decodable {
+    var title: String
+    var caption: String?
+    var imageURL: String?
+    var url: String?
+    enum CodingKeys: String, CodingKey { case title, caption, imageURL, url }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guard let t = c.flexString(.title) else { throw RepoError.notARepo }
+        title = t; caption = c.flexString(.caption); imageURL = c.flexString(.imageURL); url = c.flexString(.url)
+    }
+}
+
 struct RepoFile: Decodable {
     var name: String?
     var iconURL: String?
     var apps: [RepoApp]
+    var news: [RepoNews]
+    var featured: [String]
 
-    enum CodingKeys: String, CodingKey { case name, iconURL, apps }
+    enum CodingKeys: String, CodingKey { case name, iconURL, apps, news, featuredApps }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         name = c.flexString(.name)
         iconURL = c.flexString(.iconURL)
+        news = (try? c.decodeIfPresent([Lossy<RepoNews>].self, forKey: .news))?.compactMap { $0.value } ?? []
+        featured = (try? c.decodeIfPresent([String].self, forKey: .featuredApps)) ?? []
         guard let list = try? c.decode([Lossy<RepoApp>].self, forKey: .apps) else {
             throw RepoError.notARepo
         }
@@ -52,9 +91,13 @@ struct RepoApp: Decodable {
     var downloadURL: String?
     var size: Int64?
     var versions: [RepoVersion]?
+    var subtitle: String?
+    var category: String?
+    var shots: [String] = []
 
     enum CodingKeys: String, CodingKey {
         case name, bundleIdentifier, developerName, iconURL, version, versionDate, downloadURL, size, versions
+        case subtitle, category, localizedDescription, screenshots, screenshotURLs
     }
 
     init(from decoder: Decoder) throws {
@@ -69,6 +112,15 @@ struct RepoApp: Decodable {
         downloadURL = c.flexString(.downloadURL)
         size = c.flexInt(.size)
         versions = (try? c.decodeIfPresent([Lossy<RepoVersion>].self, forKey: .versions))?.compactMap { $0.value }
+        category = c.flexString(.category)
+        var sub = c.flexString(.subtitle) ?? ""
+        if sub.isEmpty, let d = c.flexString(.localizedDescription) {
+            sub = String(d.replacingOccurrences(of: "\n", with: " ").prefix(120))
+        }
+        subtitle = sub.isEmpty ? nil : sub
+        let a = (try? c.decodeIfPresent(ShotList.self, forKey: .screenshots))?.urls ?? []
+        let b = (try? c.decodeIfPresent([String].self, forKey: .screenshotURLs)) ?? []
+        shots = Array((a.isEmpty ? b : a).prefix(4))
     }
 }
 
@@ -123,6 +175,9 @@ struct AppEntry: Identifiable, Hashable {
     let versions: [AppVersion]
     let repoName: String
     let repoURL: String
+    let subtitle: String
+    let category: String
+    let shots: [URL]
     /// Lower-cased name, bundle ID and developer, made once so searching 17,000 apps stays fast. Also the sort order.
     let key: String
     var current: AppVersion? { versions.first }
@@ -145,4 +200,20 @@ func compareVersions(_ a: String, _ b: String) -> Int {
         if p != q { return p < q ? -1 : 1 }
     }
     return 0
+}
+
+
+/// What a source says about itself, beyond its apps.
+struct NewsItem: Identifiable, Hashable {
+    var id: String { title + (url?.absoluteString ?? "") }
+    let title: String
+    let caption: String
+    let image: URL?
+    let url: URL?
+}
+
+struct RepoMeta {
+    var icon: URL?
+    var news: [NewsItem] = []
+    var featured: [String] = []
 }
