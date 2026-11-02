@@ -21,13 +21,14 @@ targets:
       - Resources
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: team.decrypt.app
+        PRODUCT_BUNDLE_IDENTIFIER: team.decrypt.0xDEC7977EA1
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1,2"
     info:
       path: Sources/Info.plist
       properties:
         CFBundleDisplayName: 0xDEC7977EA1
+        CFBundleName: 0xDEC7977EA1
         UILaunchScreen:
           UIColorName: LaunchBackground
           UIImageRespectsSafeAreaInsets: true
@@ -42,7 +43,7 @@ targets:
           - flarestore
           - altstore
         CFBundleURLTypes:
-          - CFBundleURLName: team.decrypt.app
+          - CFBundleURLName: team.decrypt.0xDEC7977EA1
             CFBundleURLSchemes:
               - decryptteam
         ITSAppUsesNonExemptEncryption: false
