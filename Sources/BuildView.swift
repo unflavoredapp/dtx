@@ -3,10 +3,20 @@ import UniformTypeIdentifiers
 
 // MARK: - Model: Decrypt (if needed) → build on the server → hand over the link or the file
 
+struct FrameworkFile: Hashable {
+    let rel: String      // path inside the .framework folder
+    let data: Data
+}
+
+/// A library the person added: one .dylib, or a whole .framework folder.
 struct PickedLib: Identifiable, Hashable {
     var id: String { name }
     let name: String
-    let data: Data
+    var data = Data()                  // a .dylib
+    var exec: String? = nil            // a .framework: the path of its binary inside the folder
+    var files: [FrameworkFile] = []    // a .framework: every file in it
+    var isFramework: Bool { exec != nil }
+    var size: Int64 { isFramework ? files.reduce(0) { $0 + Int64($1.data.count) } : Int64(data.count) }
 }
 
 enum BuildSource: Hashable {
@@ -19,6 +29,10 @@ struct BuildOptions {
     var rpath = false          // false: @executable_path, true: @rpath
     var frameworksFolder = true
     var stripSignature = true
+    var name = ""              // optional edits to the app's own info
+    var bid = ""
+    var minOS = ""
+    var remove: [String] = []  // load commands to strip from the main binary
 }
 
 enum BuildStage: Equatable { case idle, decrypting, uploading, building, done, failed }
@@ -114,14 +128,25 @@ final class BuildModel: ObservableObject {
         var libSpecs: [[String: Any]] = []
         var zip = Data()
         if !libs.isEmpty {
-            zip = ZipStore.build(libs.map { (name: "libs/" + $0.name, data: $0.data) })
-            libSpecs = libs.map { ["name": $0.name, "entry": "libs/" + $0.name] }
+            var entries: [(name: String, data: Data)] = []
+            for (i, l) in libs.enumerated() {
+                if let exec = l.exec {
+                    for f in l.files { entries.append((name: "libs/\(i)/" + f.rel, data: f.data)) }
+                    libSpecs.append(["name": l.name, "framework": l.name, "exec": exec,
+                                     "files": l.files.map { ["rel": $0.rel, "entry": "libs/\(i)/" + $0.rel] }])
+                } else {
+                    entries.append((name: "libs/\(i)/" + l.name, data: l.data))
+                    libSpecs.append(["name": l.name, "entry": "libs/\(i)/" + l.name])
+                }
+            }
+            zip = ZipStore.build(entries)
         }
         stage = .uploading; message = "Starting the build on the server…"; queue = 0
         let settings: [String: Any] = [
             "base": o.rpath ? "rpath" : "exe", "folder": o.frameworksFolder ? "Frameworks/" : "", "kind": "load",
             "stripSig": o.stripSignature, "rewrite": true,
-            "edit": ["name": "", "bid": "", "minOS": ""], "junk": ["sig": true, "prov": true, "plug": false, "watch": false], "remove": [String](),
+            "edit": ["name": o.name.trimmingCharacters(in: .whitespaces), "bid": o.bid.trimmingCharacters(in: .whitespaces), "minOS": o.minOS.trimmingCharacters(in: .whitespaces)],
+            "junk": ["sig": true, "prov": true, "plug": false, "watch": false], "remove": o.remove,
         ]
         let spec: [String: Any] = ["src": src, "a": ["bid": app.bid, "name": app.name], "ver": source.version, "fname": Self.safe(app.name),
                                    "settings": settings, "libs": libSpecs, "bundleSize": zip.count]
@@ -208,10 +233,16 @@ struct BuildScreen: View {
     @State private var opts = BuildOptions()
     @State private var libs: [PickedLib] = []
     @State private var importing = false
+    @State private var importFramework = false
     @State private var importError = ""
+    @State private var cmds: [LoadCmd] = []
+    @State private var cmdsState = CmdsState.idle
+    @State private var strip: Set<String> = []
     @State private var share: ShareItem?
 
     private struct ShareItem: Identifiable { let id = UUID(); let items: [Any] }
+    struct LoadCmd: Identifiable, Hashable { let kind: String; let path: String; var id: String { path } }
+    enum CmdsState: Equatable { case idle, loading, loaded, failed(String) }
 
     private var repoURL: URL? { app.current?.url }
     private var storeID: String? { (storeInfo?.id).flatMap { $0.isEmpty ? nil : $0 } }
@@ -240,18 +271,69 @@ struct BuildScreen: View {
         .navigationTitle("Decrypt & Inject").navigationBarTitleDisplayMode(.inline)
         .onAppear { useStore = newer || repoURL == nil }
         .onChange(of: storeInfo?.ver) { _ in if model.stage == .idle { useStore = newer || repoURL == nil } }
-        .fileImporter(isPresented: $importing, allowedContentTypes: [.data], allowsMultipleSelection: true) { result in
+        .fileImporter(isPresented: $importing, allowedContentTypes: importFramework ? [.folder] : [.data], allowsMultipleSelection: !importFramework) { result in
             guard case .success(let urls) = result else { return }
-            for u in urls {
-                guard u.pathExtension.lowercased() == "dylib" else { importError = "\(u.lastPathComponent) isn't a .dylib."; continue }
-                let ok = u.startAccessingSecurityScopedResource(); defer { if ok { u.stopAccessingSecurityScopedResource() } }
-                guard let d = try? Data(contentsOf: u) else { importError = "Couldn't read \(u.lastPathComponent)."; continue }
-                if u.lastPathComponent.lowercased() == "dtx.dylib" { importError = "dtx.dylib is already added to every build."; continue }
-                libs.removeAll { $0.name == u.lastPathComponent }
-                libs.append(PickedLib(name: u.lastPathComponent, data: d))
-            }
+            for u in urls { if importFramework { addFramework(u) } else { addDylib(u) } }
         }
+        .task(id: repoURL?.absoluteString ?? "") { await loadCommands() }
         .sheet(item: $share) { ShareSheet(items: $0.items) }
+    }
+
+    // MARK: adding libraries
+
+    private func addDylib(_ u: URL) {
+        guard u.pathExtension.lowercased() == "dylib" else { importError = "\(u.lastPathComponent) isn't a .dylib."; return }
+        let ok = u.startAccessingSecurityScopedResource(); defer { if ok { u.stopAccessingSecurityScopedResource() } }
+        guard let d = try? Data(contentsOf: u) else { importError = "Couldn't read \(u.lastPathComponent)."; return }
+        if u.lastPathComponent.lowercased() == "dtx.dylib" { importError = "dtx.dylib is already added to every build."; return }
+        libs.removeAll { $0.name == u.lastPathComponent }
+        libs.append(PickedLib(name: u.lastPathComponent, data: d))
+    }
+
+    private func addFramework(_ root: URL) {
+        let name = root.lastPathComponent
+        guard name.lowercased().hasSuffix(".framework") else { importError = "\(name) isn't a .framework folder."; return }
+        let ok = root.startAccessingSecurityScopedResource(); defer { if ok { root.stopAccessingSecurityScopedResource() } }
+        guard let en = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey], options: []) else { importError = "Couldn't open \(name)."; return }
+        var files: [FrameworkFile] = []
+        let base = root.pathComponents.count
+        for case let f as URL in en {
+            guard (try? f.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true, let d = try? Data(contentsOf: f) else { continue }
+            let rel = f.pathComponents.dropFirst(base).joined(separator: "/")
+            if !rel.isEmpty { files.append(FrameworkFile(rel: rel, data: d)) }
+        }
+        // the binary's name comes from the framework's own Info.plist, or the folder name
+        var exec = String(name.dropLast(".framework".count))
+        if let plist = files.first(where: { $0.rel == "Info.plist" }),
+           let obj = try? PropertyListSerialization.propertyList(from: plist.data, options: [], format: nil) as? [String: Any],
+           let e = obj["CFBundleExecutable"] as? String, !e.isEmpty { exec = e }
+        guard files.contains(where: { $0.rel == exec }) else { importError = "\(name) has no binary named \(exec)."; return }
+        libs.removeAll { $0.name == name }
+        libs.append(PickedLib(name: name, exec: exec, files: files))
+    }
+
+    // MARK: the app's existing load commands (from the repo's IPA, read on the server)
+
+    private func loadCommands() async {
+        cmds = []; strip = []
+        guard let u = repoURL else { cmdsState = .idle; return }
+        cmdsState = .loading
+        do {
+            let s: PluginStart = try await Api.shared.post("/api/plugins/loadcmds/run", json: ["src": ["url": u.absoluteString], "options": ["system": false]])
+            guard let id = s.id else { throw ApiError.bad }
+            for _ in 0..<120 {
+                try await Task.sleep(nanoseconds: 1_500_000_000)
+                let j: PluginJob = try await Api.shared.get("/api/plugins/jobs/" + id)
+                if j.status == "done" {
+                    let rows = j.result?.sections?.first(where: { $0.kind == "table" })?.rows ?? []
+                    cmds = rows.filter { $0.count > 1 && $0[0] != "rpath" }.map { LoadCmd(kind: $0[0], path: $0[1]) }
+                    cmdsState = .loaded; return
+                }
+                if j.status == "err" || j.status == "cancel" { throw ApiError.server(j.error ?? "Couldn't read the load commands.", 0) }
+            }
+            throw ApiError.server("Reading the load commands took too long.", 0)
+        } catch is CancellationError { return }
+        catch { cmdsState = .failed(error.localizedDescription) }
     }
 
     // MARK: header
@@ -274,11 +356,14 @@ struct BuildScreen: View {
         VStack(alignment: .leading, spacing: 14) {
             sourceCard
             injectionCard
+            commandsCard
             libsCard
+            infoCard
             if !model.error.isEmpty { Text(model.error).font(.footnote).foregroundStyle(Color.red) }
             Button {
                 guard let s = source else { return }
-                model.start(app: app, source: s, options: opts, libs: libs)
+                var o = opts; o.remove = cmds.map(\.path).filter { strip.contains($0) }
+                model.start(app: app, source: s, options: o, libs: libs)
             } label: {
                 Label("Build IPA", systemImage: "wand.and.stars").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
             }
@@ -331,11 +416,16 @@ struct BuildScreen: View {
             libRow("dtx.dylib", "Always added", locked: true) {}
             ForEach(libs) { l in
                 Divider().overlay(Color.dtLine)
-                libRow(l.name, ByteCountFormatter.string(fromByteCount: Int64(l.data.count), countStyle: .file), locked: false) { libs.removeAll { $0.id == l.id } }
+                libRow(l.name, (l.isFramework ? "Framework · " : "") + ByteCountFormatter.string(fromByteCount: l.size, countStyle: .file), locked: false) { libs.removeAll { $0.id == l.id } }
             }
             Divider().overlay(Color.dtLine)
-            Button { importError = ""; importing = true } label: {
-                Label("Add library (.dylib)", systemImage: "plus.circle.fill").font(.subheadline.weight(.semibold)).padding(.vertical, 12)
+            HStack(spacing: 16) {
+                Button { importError = ""; importFramework = false; importing = true } label: {
+                    Label("Add .dylib", systemImage: "plus.circle.fill").font(.subheadline.weight(.semibold)).padding(.vertical, 12)
+                }
+                Button { importError = ""; importFramework = true; importing = true } label: {
+                    Label("Add .framework", systemImage: "folder.badge.plus").font(.subheadline.weight(.semibold)).padding(.vertical, 12)
+                }
             }
             if !importError.isEmpty { Text(importError).font(.caption).foregroundStyle(Color.red) }
         }
@@ -344,7 +434,7 @@ struct BuildScreen: View {
 
     private func libRow(_ name: String, _ sub: String, locked: Bool, remove: @escaping () -> Void) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: locked ? "lock.fill" : "shippingbox").foregroundStyle(Color.dtAccent).frame(width: 24)
+            Image(systemName: locked ? "lock.fill" : (name.lowercased().hasSuffix(".framework") ? "square.stack.3d.up" : "shippingbox")).foregroundStyle(Color.dtAccent).frame(width: 24)
             VStack(alignment: .leading, spacing: 1) {
                 Text(name).foregroundStyle(.white).lineLimit(1)
                 Text(sub).font(.caption).foregroundStyle(.secondary)
@@ -353,6 +443,62 @@ struct BuildScreen: View {
             if !locked { Button(role: .destructive, action: remove) { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) } }
         }
         .padding(.vertical, 10)
+    }
+
+    private var commandsCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("EXISTING LOAD COMMANDS" + (cmdsState == .loaded ? " (\(cmds.count))" : "")).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            switch cmdsState {
+            case .idle:
+                Text("Shown for the repo's IPA. This app has none, so there is nothing to strip.").font(.footnote).foregroundStyle(.secondary)
+            case .loading:
+                HStack(spacing: 8) { ProgressView(); Text("Reading the repo's IPA on the server…").font(.footnote).foregroundStyle(.secondary) }
+            case .failed(let m):
+                Text(m).font(.footnote).foregroundStyle(Color.red)
+                Button("Try again") { Task { await loadCommands() } }.buttonStyle(.bordered).tint(.dtAccent)
+            case .loaded:
+                if cmds.isEmpty { Text("No extra libraries are loaded by this app.").font(.footnote).foregroundStyle(.secondary) }
+                else {
+                    Text("Tap one to strip it from the app.").font(.footnote).foregroundStyle(.secondary)
+                    ForEach(cmds) { c in
+                        Button { if strip.contains(c.path) { strip.remove(c.path) } else { strip.insert(c.path) } } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: strip.contains(c.path) ? "trash.circle.fill" : "circle").foregroundStyle(strip.contains(c.path) ? Color.red : Color.secondary)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(c.path).font(.system(size: 12, design: .monospaced)).foregroundStyle(strip.contains(c.path) ? Color.red : .white)
+                                        .strikethrough(strip.contains(c.path)).multilineTextAlignment(.leading)
+                                    Text(c.kind).font(.caption2).foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            if useStore { Text("The commands are read from the repo's IPA. The same ones are stripped from the decrypted App Store build.").font(.caption2).foregroundStyle(.secondary) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading).card()
+    }
+
+    private var infoCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("APP INFO (OPTIONAL)").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            infoField("Name", app.name, $opts.name)
+            infoField("Bundle ID", app.bid, $opts.bid)
+            infoField("Minimum iOS", "e.g. 14.0", $opts.minOS)
+            Text("Leave a field empty to keep the app's own value.").font(.caption2).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading).card()
+    }
+
+    private func infoField(_ title: String, _ placeholder: String, _ text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.subheadline.bold()).foregroundStyle(.white)
+            TextField(placeholder, text: text).textFieldStyle(.roundedBorder)
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+        }
     }
 
     // MARK: progress, result, failure
