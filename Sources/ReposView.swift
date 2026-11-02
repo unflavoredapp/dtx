@@ -32,7 +32,7 @@ struct ReposView: View {
                 }
             }
             .scrollContentBackground(.hidden).background(AppBackground())
-            .withTopBar("Repos")
+            .withTopBar(.repos, title: "Repos")
         }
     }
 

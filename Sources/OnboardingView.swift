@@ -26,7 +26,6 @@ struct OnboardingView: View {
             Image("Logo").resizable().frame(width: 112, height: 112)
                 .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(Color.dtLine))
-                .shadow(color: Color.dtAccent.opacity(0.25), radius: 24)
             Text("Decrypt.Team").font(.largeTitle.bold())
             Text("iOS app discovery and decryption tools").font(.subheadline).foregroundStyle(.secondary)
 
@@ -43,7 +42,7 @@ struct OnboardingView: View {
             Button { seen = true } label: {
                 Text("Continue").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 15)
             }
-            .buttonStyle(.borderedProminent).controlSize(.large)
+            .buttonStyle(AccentButtonStyle())
             .padding(.bottom, 24)
         }
     }

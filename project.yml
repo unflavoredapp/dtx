@@ -41,4 +41,8 @@ targets:
           - gbox
           - flarestore
           - altstore
+        CFBundleURLTypes:
+          - CFBundleURLName: team.decrypt.app
+            CFBundleURLSchemes:
+              - decryptteam
         ITSAppUsesNonExemptEncryption: false

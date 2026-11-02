@@ -367,7 +367,7 @@ struct BuildScreen: View {
             } label: {
                 Label("Build IPA", systemImage: "wand.and.stars").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
             }
-            .buttonStyle(.borderedProminent).tint(.dtAccent).disabled(source == nil)
+            .buttonStyle(AccentButtonStyle()).disabled(source == nil)
             Text("The server does the work. Leave this screen open until it finishes.").font(.footnote).foregroundStyle(.secondary)
         }
     }
@@ -543,12 +543,12 @@ struct BuildScreen: View {
                 .compactMap { $0 }.joined(separator: " · ")).font(.footnote).foregroundStyle(.secondary)
             if let f = model.localFile {
                 Button { share = ShareItem(items: [f]) } label: { Label("Save or share IPA", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity).padding(.vertical, 6) }
-                    .buttonStyle(.borderedProminent).tint(.dtAccent)
+                    .buttonStyle(AccentButtonStyle())
             } else {
                 Button { model.downloadIPA() } label: {
                     Label(model.downloading ? "Downloading… \(Int(model.downloadPct * 100))%" : "Download IPA", systemImage: "arrow.down.circle.fill").frame(maxWidth: .infinity).padding(.vertical, 6)
                 }
-                .buttonStyle(.borderedProminent).tint(.dtAccent).disabled(model.downloading)
+                .buttonStyle(AccentButtonStyle()).disabled(model.downloading)
                 if model.downloading { ProgressView(value: model.downloadPct).tint(.dtAccent) }
             }
             if !model.downloadError.isEmpty { Text(model.downloadError).font(.footnote).foregroundStyle(Color.red) }
@@ -571,7 +571,7 @@ struct BuildScreen: View {
             Text(model.error).font(.subheadline).foregroundStyle(.white)
             if let f = model.errorLog {
                 Button { share = ShareItem(items: [f]) } label: { Label("Share error log", systemImage: "doc.text").frame(maxWidth: .infinity).padding(.vertical, 6) }
-                    .buttonStyle(.borderedProminent).tint(.dtAccent)
+                    .buttonStyle(AccentButtonStyle())
             }
             if model.error.hasPrefix("A build is already running") {
                 Button("Cancel the running build") { Task { await model.cancelStale() } }.buttonStyle(.bordered).tint(.dtAccent)

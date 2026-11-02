@@ -147,7 +147,7 @@ struct AppDetailView: View {
         Button { showBuild = true } label: {
             Label("Decrypt & Inject", systemImage: "wand.and.stars").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
         }
-        .buttonStyle(.borderedProminent).tint(.dtAccent)
+        .buttonStyle(AccentButtonStyle())
     }
 
     private var versions: some View {

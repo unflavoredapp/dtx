@@ -12,6 +12,7 @@ struct DecryptTeamApp: App {
                 .environmentObject(session)
                 .preferredColorScheme(.dark)
                 .tint(.dtAccent)
+                .onOpenURL { url in if url.scheme == "decryptteam" { session.nudge() } }
         }
     }
 }
@@ -19,6 +20,7 @@ struct DecryptTeamApp: App {
 struct RootView: View {
     @EnvironmentObject var store: RepoStore
     @EnvironmentObject var session: Session
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Group {
@@ -32,6 +34,7 @@ struct RootView: View {
         }
         .task { await store.refresh(); await session.refresh() }
         .animation(.easeInOut(duration: 0.25), value: session.allowed)
+        .onChange(of: scenePhase) { phase in if phase == .active { session.nudge() } }
     }
 
     private var mainTabs: some View {
@@ -46,6 +49,13 @@ struct RootView: View {
         }
         .sheet(isPresented: $store.showQuickBuild) { QuickBuildView() }
         .sheet(isPresented: $store.showTools) { ToolsHubView() }
+        .sheet(item: $store.pickedApp) { app in
+            NavigationStack {
+                AppDetailView(app: app)
+                    .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Close") { store.pickedApp = nil } } }
+            }
+            .preferredColorScheme(.dark)
+        }
     }
 
     private func screen<V: View>(_ tab: AppTab, @ViewBuilder _ content: () -> V) -> some View {

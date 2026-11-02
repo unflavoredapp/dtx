@@ -3,113 +3,35 @@ import SwiftUI
 struct HomeView: View {
     @EnvironmentObject var store: RepoStore
     @EnvironmentObject var session: Session
-    @State private var query = ""
     @State private var stats: Stats?
     @State private var changes: [ChangelogReply.Entry] = []
     @State private var recent: [RecentReply.Item] = []
     @State private var showChangelog = false
     @State private var showActivity = false
-    @State private var slide = 0
-    @StateObject private var searcher = AppSearcher()
-    @FocusState private var focus: Bool
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 18) {
-                    if query.trimmingCharacters(in: .whitespaces).isEmpty {
-                        hero
-                        tools
-                    }
-                    searchBar
+                    tools
                     if store.onlyDefault { repoNotice }
-                    if query.trimmingCharacters(in: .whitespaces).isEmpty {
-                        statsRow
-                        HStack(alignment: .top, spacing: 12) {
-                            changelogCard
-                            activityCard
-                        }
-                        footer
-                    } else {
-                        resultsList
+                    statsRow
+                    HStack(alignment: .top, spacing: 12) {
+                        changelogCard
+                        activityCard
                     }
+                    footer
                 }
                 .padding(.horizontal, 14).padding(.bottom, 24)
             }
             .background(AppBackground())
-            .withTopBar()
+            .withTopBar(.home)
             .navigationDestination(for: AppEntry.self) { AppDetailView(app: $0) }
-            .task { searcher.minChars = 2; await load() }
-            .onChange(of: query) { _ in searcher.update(query: query, apps: store.apps) }
-            .onChange(of: store.loading) { _ in searcher.update(query: query, apps: store.apps) }
+            .task { await load() }
             .refreshable { await load(); await store.refresh() }
             .sheet(isPresented: $showChangelog) { ChangelogView() }
             .sheet(isPresented: $showActivity) { ActivityView(items: recent) }
         }
-    }
-
-    // MARK: hero banner (swipe for more)
-
-    private struct Slide { let title: String; let text: String; let button: String; let icon: String; let action: () -> Void }
-
-    private var slides: [Slide] {
-        [
-            Slide(title: "Build • Decrypt • Inject", text: "Create custom IPAs with your dtx.dylib and saved libraries.", button: "Start Build", icon: "lock.open.fill") { store.showQuickBuild = true },
-            Slide(title: "Your repos, one search", text: "Add AltStore or SideStore repos and find any app in them.", button: "Add a repo", icon: "square.stack.3d.up.fill") { store.tab = .repos },
-            Slide(title: "Analysis tools", text: "Read load commands, bundles and strings of any IPA.", button: "Open tools", icon: "wrench.and.screwdriver.fill") { store.showTools = true },
-        ]
-    }
-
-    private var hero: some View {
-        VStack(spacing: 8) {
-            TabView(selection: $slide) {
-                ForEach(Array(slides.enumerated()), id: \.offset) { i, s in
-                    HStack(spacing: 8) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(s.title).font(.system(size: 20, weight: .heavy)).foregroundStyle(.white).lineLimit(2).minimumScaleFactor(0.85).fixedSize(horizontal: false, vertical: true)
-                            Text(s.text).font(.system(size: 13)).foregroundStyle(.white.opacity(0.7)).lineLimit(3).fixedSize(horizontal: false, vertical: true)
-                            Spacer(minLength: 4)
-                            Button(action: s.action) {
-                                HStack(spacing: 6) { Text(s.button).font(.system(size: 15, weight: .bold)); Image(systemName: "chevron.right").font(.system(size: 12, weight: .bold)) }
-                                    .foregroundStyle(.white).padding(.horizontal, 16).padding(.vertical, 9)
-                                    .background(Capsule().fill(LinearGradient(colors: [Color.dtAccent, Color(red: 0.95, green: 0.4, blue: 0.05)], startPoint: .top, endPoint: .bottom)))
-                                    .shadow(color: Color.dtAccent.opacity(0.5), radius: 10)
-                            }
-                        }
-                        Spacer(minLength: 0)
-                        heroArt(s.icon).scaleEffect(0.85)
-                    }
-                    .padding(.horizontal, 16).padding(.vertical, 16)
-                    .tag(i)
-                }
-            }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-            .frame(height: 196)
-            .background(RoundedRectangle(cornerRadius: 26, style: .continuous).fill(LinearGradient(colors: [Color.dtAccent.opacity(0.18), Color.black.opacity(0.45)], startPoint: .topTrailing, endPoint: .bottomLeading)))
-            .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(LinearGradient(colors: [Color.dtAccent.opacity(0.9), Color.dtAccent.opacity(0.2)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1.5))
-            .shadow(color: Color.dtAccent.opacity(0.3), radius: 16)
-            HStack(spacing: 6) {
-                ForEach(0..<slides.count, id: \.self) { i in
-                    Circle().fill(i == slide ? Color.dtAccent : Color.white.opacity(0.25)).frame(width: i == slide ? 8 : 6, height: i == slide ? 8 : 6)
-                }
-            }
-        }
-    }
-
-    private func heroArt(_ icon: String) -> some View {
-        ZStack {
-            ForEach(0..<3, id: \.self) { i in
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .fill(LinearGradient(colors: [Color.dtAccent.opacity(0.55 - Double(i) * 0.15), Color.dtAccent.opacity(0.12)], startPoint: .top, endPoint: .bottom))
-                    .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Color.dtAccent.opacity(0.7), lineWidth: 1))
-                    .frame(width: 84, height: 84)
-                    .rotationEffect(.degrees(Double(i) * 7 - 7))
-                    .offset(x: CGFloat(i) * 8, y: CGFloat(-i) * 7 + 8)
-            }
-            Image(systemName: icon).font(.system(size: 36, weight: .bold)).foregroundStyle(.white).shadow(color: Color.dtAccent, radius: 8)
-        }
-        .frame(width: 104, height: 104)
-        .shadow(color: Color.dtAccent.opacity(0.4), radius: 14)
     }
 
     // MARK: featured tools
@@ -125,7 +47,7 @@ struct HomeView: View {
             }
             HStack(spacing: 8) {
                 toolCard("Find Apps", "Search every repo you added", "magnifyingglass", [.cyan, .blue], nil) { store.tab = .search }
-                toolCard("Decrypt & Inject", nil, "lock.open.fill", [.orange, .red], "EXCLUSIVE") { store.showQuickBuild = true }
+                toolCard("Decrypt & Inject", nil, "lock.open.fill", [Color(red: 0.99, green: 0.55, blue: 0.2), .red], "EXCLUSIVE") { store.showQuickBuild = true }
                 toolCard("Repo Studio", "Read repos, pull IPAs and libraries", "square.stack.3d.up.fill", [.purple, .indigo], nil) { store.tab = .repos }
                 toolCard("Tools", "CFG viewer, injector and more", "briefcase.fill", [Color(red: 0.2, green: 0.8, blue: 0.45), Color(red: 0.05, green: 0.55, blue: 0.3)], nil) { store.showTools = true }
             }
@@ -147,27 +69,13 @@ struct HomeView: View {
             }
             .frame(maxWidth: .infinity, minHeight: 142, alignment: .top)
             .padding(.vertical, 10).padding(.horizontal, 4)
-            .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Color.black.opacity(0.4)).background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous)))
-            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(LinearGradient(colors: [Color.dtAccent.opacity(0.5), Color.dtAccent.opacity(0.1)], startPoint: .top, endPoint: .bottom)))
-            .shadow(color: Color.dtAccent.opacity(0.15), radius: 8)
+            .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Color.white.opacity(0.065)))
+            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Color.white.opacity(0.1)))
         }
         .buttonStyle(.plain)
     }
 
-    // MARK: search
-
-    private var searchBar: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Search apps in your repos…", text: $query)
-                .textInputAutocapitalization(.never).autocorrectionDisabled().submitLabel(.search).focused($focus)
-            if !query.isEmpty {
-                Button { query = ""; focus = false } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
-            }
-        }
-        .padding(.horizontal, 18).padding(.vertical, 15)
-        .glowCapsule(strong: true)
-    }
+    // MARK: notice
 
     private var repoNotice: some View {
         HStack(spacing: 12) {
@@ -176,47 +84,12 @@ struct HomeView: View {
                 Text(store.repos.isEmpty ? "Add a repo to search for apps." : "Add your own repo to find more apps.").font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            Button("Add a repo") { store.tab = .repos }.buttonStyle(.borderedProminent).tint(.dtAccent)
+            Button("Add a repo") { store.tab = .repos }.buttonStyle(AccentButtonStyle())
         }
         .padding(12)
         .background(Color.dtAccent.opacity(0.12))
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.dtAccent))
-    }
-
-    private var resultsList: some View {
-        LazyVStack(spacing: 0) {
-            if searcher.shown.isEmpty {
-                if searcher.searching {
-                    ProgressView().padding(.vertical, 30)
-                } else {
-                    Text(query.trimmingCharacters(in: .whitespaces).count < 2 ? "Type an app name to search your repos." : "No apps found in your repos.")
-                        .foregroundStyle(.secondary).padding(.vertical, 30)
-                }
-            }
-            ForEach(searcher.shown) { app in
-                NavigationLink(value: app) {
-                    HStack(spacing: 12) {
-                        AppIconView(url: app.icon, name: app.name, size: 48)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(app.name).font(.headline).foregroundStyle(.white).lineLimit(1)
-                            Text([app.current.map { "v" + $0.version }, app.repoName].compactMap { $0 }.joined(separator: " · ")).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right").font(.footnote).foregroundStyle(.secondary)
-                    }
-                    .padding(.vertical, 10)
-                }
-                Divider().overlay(Color.dtLine)
-            }
-            if searcher.hasMore {
-                // the next 10 load when this row scrolls into view
-                ProgressView().padding(.vertical, 14).onAppear { searcher.loadMore() }
-            } else if searcher.total > 0 {
-                Text("\(formatCount(Int64(searcher.total))) result\(searcher.total == 1 ? "" : "s")").font(.footnote).foregroundStyle(.secondary).padding(.top, 10)
-            }
-        }
-        .card()
     }
 
     // MARK: stats
@@ -238,9 +111,8 @@ struct HomeView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.black.opacity(0.4)))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(LinearGradient(colors: [Color.dtAccent.opacity(0.5), Color.dtAccent.opacity(0.1)], startPoint: .top, endPoint: .bottom)))
-        .shadow(color: Color.dtAccent.opacity(0.15), radius: 6)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color.white.opacity(0.065)))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.white.opacity(0.1)))
     }
 
     // MARK: changelog and activity

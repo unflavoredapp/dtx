@@ -12,11 +12,20 @@ final class RepoStore: ObservableObject {
     @Published var message: String?
     @Published var tab: AppTab = .home
     @Published var showQuickBuild = false
+    // the search that drops down from the top bar
+    let searcher = AppSearcher()
+    @Published var searchOpen = false
+    @Published var searchText = "" {
+        didSet { if searchText != oldValue { searcher.update(query: searchText, apps: apps) } }
+    }
+    @Published var pickedApp: AppEntry?
+    func closeSearch() { searchOpen = false; searchText = "" }
     @Published var showTools = false
 
     @AppStorage("dt.server") var server: String = "https://decrypt.team"
 
     init() {
+        searcher.minChars = 2
         if let data = UserDefaults.standard.data(forKey: key),
            let list = try? JSONDecoder().decode([RepoInfo].self, from: data) {
             repos = list
@@ -57,6 +66,7 @@ final class RepoStore: ObservableObject {
         apps = await Task.detached(priority: .userInitiated) { merged.sorted { $0.key < $1.key } }.value
         if failed > 0 { message = failed == 1 ? "One repo couldn't be loaded." : "\(failed) repos couldn't be loaded." }
         loading = false
+        if !searchText.isEmpty { searcher.update(query: searchText, apps: apps) }
     }
 
     func add(_ text: String) async throws {

@@ -13,7 +13,7 @@ struct AppIconView: View {
                 ZStack {
                     Color.gray.opacity(0.25)
                     Text(String(name.trimmingCharacters(in: .punctuationCharacters).prefix(1)).uppercased())
-                        .font(.system(size: size * 0.42, weight: .bold)).foregroundStyle(.orange)
+                        .font(.system(size: size * 0.42, weight: .bold)).foregroundStyle(Color.dtAccent)
                 }
             }
         }
@@ -50,7 +50,7 @@ struct SearchView: View {
                                     .font(.subheadline).foregroundStyle(.secondary)
                             }
                             Spacer()
-                            Button("Add a repo") { store.tab = .repos }.buttonStyle(.borderedProminent)
+                            Button("Add a repo") { store.tab = .repos }.buttonStyle(AccentButtonStyle())
                         }
                     }
                 }
@@ -80,7 +80,7 @@ struct SearchView: View {
             .overlay { if store.loading && store.apps.isEmpty { ProgressView() } }
             .scrollContentBackground(.hidden).background(AppBackground())
             .navigationDestination(for: AppEntry.self) { AppDetailView(app: $0) }
-            .withTopBar("Apps")
+            .withTopBar(.search, title: "Apps")
             .refreshable { await store.refresh() }
             .task { searcher.update(query: query, apps: store.apps) }
             .onChange(of: query) { _ in searcher.update(query: query, apps: store.apps) }

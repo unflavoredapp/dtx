@@ -76,6 +76,7 @@ final class Session: ObservableObject {
     /// Closed beta: only signed-in Decrypt.Team staff get past the onboarding screen.
     var allowed: Bool { signedIn && beta }
     private var loginTask: Task<Void, Never>?
+    private var nudged = false
 
     func refresh() async {
         let me: MeReply? = try? await Api.shared.get("/api/auth/me")
@@ -98,7 +99,10 @@ final class Session: ObservableObject {
                 open(url)
                 let until = Date().addingTimeInterval(300)
                 while Date() < until, !Task.isCancelled {
-                    try await Task.sleep(nanoseconds: 2_000_000_000)
+                    // wait about 2 seconds, or less when the app was just reopened from Telegram
+                    var waited = 0
+                    while waited < 4 && !self.nudged { try await Task.sleep(nanoseconds: 500_000_000); waited += 1 }
+                    self.nudged = false
                     let q = st.token.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? st.token
                     let p: TgPoll = try await Api.shared.get("/api/auth/telegram/poll?token=" + q)
                     if p.status == "done" {
@@ -118,6 +122,9 @@ final class Session: ObservableObject {
             }
         }
     }
+
+    /// Called when the app comes back to the front: check the Telegram login right away.
+    func nudge() { nudged = true }
 
     func cancelLogin() { loginTask?.cancel(); phase = .idle }
 
