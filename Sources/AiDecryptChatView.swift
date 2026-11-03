@@ -18,6 +18,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import PhotosUI
+import UIKit
 
 // MARK: - Model
 
@@ -376,7 +377,6 @@ struct AiDecryptChatView: View {
     @StateObject private var viewModel = AiDecryptViewModel()
     @Environment(\.dismiss) private var dismiss
     @FocusState private var inputFocused: Bool
-    @State private var showFilePicker = false
     @State private var showWebpageAlert = false
     @State private var webpageURL = ""
     @State private var photoItem: PhotosPickerItem?
@@ -396,17 +396,6 @@ struct AiDecryptChatView: View {
                 if let error = viewModel.errorText { errorBanner(error) }
                 if !viewModel.pendingAttachments.isEmpty || viewModel.binaryAttachment != nil || viewModel.pendingImage != nil { attachmentChips }
                 composer
-                    .fileImporter(
-                        isPresented: $showFilePicker,
-                        // `.item` looks like it should match anything, but the system picker greys out files whose
-                        // declared type doesn't conform to something concrete in this list — a bare .dylib often has
-                        // no registered UTI at all. `.data` (plus an explicit dylib type) keeps them selectable.
-                        allowedContentTypes: [.plainText, .sourceCode, .json, .zip, UTType(filenameExtension: "dylib") ?? .data, .data],
-                        // Single-selection: with multiple-selection on, a single tap only previews the file and
-                        // Open returns an empty set (the "tap Open, nothing happens" bug). One zip/dylib at a time
-                        // is all the tool system needs anyway, and this returns the file the instant it's picked.
-                        allowsMultipleSelection: false
-                    ) { handleFileImport($0) }
             }
             .background(AppBackground())
             .navigationBarTitleDisplayMode(.inline)
@@ -433,41 +422,28 @@ struct AiDecryptChatView: View {
         }
     }
 
-    private func handleFileImport(_ result: Result<[URL], Error>) {
-        switch result {
-        case .failure(let error):
-            viewModel.errorText = "Couldn't open that file: \(error.localizedDescription)"
-        case .success(let urls):
-            if urls.isEmpty { viewModel.errorText = "No file came back from the picker." }
-            for url in urls {
-                guard url.startAccessingSecurityScopedResource() else {
-                    viewModel.errorText = "Couldn't get permission to read \(url.lastPathComponent)."
-                    continue
-                }
-                defer { url.stopAccessingSecurityScopedResource() }
-                do {
-                    // NSFileCoordinator (not a bare Data(contentsOf:)) makes sure an iCloud-only file
-                    // is actually downloaded first — otherwise this silently reads 0 bytes.
-                    var coordError: NSError?
-                    var data: Data?
-                    var readError: Error?
-                    NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordError) { readURL in
-                        do { data = try Data(contentsOf: readURL) } catch { readError = error }
-                    }
-                    if let coordError { throw coordError }
-                    if let readError { throw readError }
-                    guard let data else { throw ZipError("That file came back empty.") }
+    private func pickFiles() {
+        DocumentPickerPresenter.pickFiles(
+            types: [.plainText, .sourceCode, .json, .zip, UTType(filenameExtension: "dylib") ?? .data, .data]
+        ) { handlePickedDocuments($0) }
+    }
 
-                    let ext = url.pathExtension.lowercased()
-                    if ext == "zip" || ext == "ipa" || ext == "dylib" || String(data: data, encoding: .utf8) == nil {
-                        // a zip/IPA/dylib (or anything else that isn't plain text): give it to the tool system, not the prompt text
-                        viewModel.addBinaryFile(name: url.lastPathComponent, data: data)
-                    } else if let text = String(data: data, encoding: .utf8) {
-                        viewModel.addFile(name: url.lastPathComponent, content: text)
-                    }
-                } catch {
-                    viewModel.errorText = "Couldn't read \(url.lastPathComponent): \(error.localizedDescription)"
+    private func handlePickedDocuments(_ urls: [URL]) {
+        if urls.isEmpty { viewModel.errorText = "No file came back from the picker." }
+        for url in urls {
+            // asCopy: true already placed a readable copy in our temp dir, so no security-scope / coordinator needed.
+            do {
+                let data = try Data(contentsOf: url)
+                guard !data.isEmpty else { throw ZipError("That file came back empty.") }
+                let ext = url.pathExtension.lowercased()
+                if ext == "zip" || ext == "ipa" || ext == "dylib" || String(data: data, encoding: .utf8) == nil {
+                    // a zip/IPA/dylib (or anything else that isn't plain text): give it to the tool system, not the prompt text
+                    viewModel.addBinaryFile(name: url.lastPathComponent, data: data)
+                } else if let text = String(data: data, encoding: .utf8) {
+                    viewModel.addFile(name: url.lastPathComponent, content: text)
                 }
+            } catch {
+                viewModel.errorText = "Couldn't read \(url.lastPathComponent): \(error.localizedDescription)"
             }
         }
     }
@@ -563,7 +539,7 @@ struct AiDecryptChatView: View {
     private var composer: some View {
         HStack(spacing: 8) {
             Menu {
-                Button { showFilePicker = true } label: { Label("Upload files", systemImage: "paperclip") }
+                Button { pickFiles() } label: { Label("Upload files", systemImage: "paperclip") }
                 Button { showPhotoPicker = true } label: { Label("Attach photo", systemImage: "photo") }
                 Button { showWebpageAlert = true } label: { Label("Attach webpage", systemImage: "globe") }
             } label: {
