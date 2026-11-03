@@ -90,34 +90,51 @@ enum AiRepoTools {
     }
 }
 
-// MARK: - Reconstruct (dedicated backend endpoint)
+// MARK: - Reconstruct (the real /api/staff/decomp engine)
 
-/// ⚠️ CONFIRM THESE TWO AGAINST THE BACKEND. The reconstruct endpoint is a dedicated route; everything else in the
-/// flow is already wired to confirmed endpoints. Adjust `startPath`, the request `body`, and the `Result` fields to
-/// match the real route, and the whole Decrypt→Reconstruct flow follows with no other changes.
+struct ReconResult: Equatable {
+    let dylibName: String
+    let summary: String
+    let downloadPath: String?   // GET this (staff-gated) to get the recovered project zip
+}
+
+/// Drives the site's own Ghidra/lifter reconstruction engine, already mounted at /api/staff/decomp (staff-gated;
+/// the app's signed-in staff session + x-dt header pass the guard). Flow: upload a Mach-O (one dylib/framework
+/// binary) → poll the job → the recovered Objective-C project is downloadable from the job.
 enum ReconstructAPI {
-    /// Assumed: POST /api/reconstruct { ipa: <decrypted IPA url>, dylib: <name> } -> { id }, then poll
-    /// GET /api/reconstruct/{id} -> { status: queued|working|done|error, msg, error, url (finished output) }.
-    static let startPath = "/api/reconstruct"
+    static let base = "/api/staff/decomp"
 
-    private struct Start: Decodable { var id: String }
-    private struct State: Decodable { var status: String; var msg: String?; var error: String?; var url: String? }
+    private struct Started: Decodable { var id: String }
+    private struct Part: Decodable { var name: String?; var dylibName: String?; var error: String? }
+    private struct Item: Decodable { var name: String?; var state: String?; var error: String?; var parts: [Part]? }
+    private struct Job: Decodable { var state: String; var log: [String]?; var items: [Item]? }
 
-    /// Reconstructs one dylib from a decrypted IPA, polling to completion and returning the finished artifact URL.
-    static func run(ipaURL: String, dylib: String, progress: @escaping (String) -> Void) async throws -> String {
-        let body: [String: Any] = ["ipa": ipaURL, "dylib": dylib]
-        let start: Start = try await Api.shared.post(startPath, json: body)
+    /// Uploads one binary and polls to completion. Ghidra reconstruction is slow (often minutes), so this can run
+    /// a long time; `progress` streams the job's own log lines.
+    static func reconstruct(name: String, data: Data, progress: @escaping (String) -> Void) async throws -> ReconResult {
+        let encName = name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? name
+        let startData = try await Api.shared.upload("POST", "\(base)/upload?name=\(encName)", body: data)
+        guard let started = try? JSONDecoder().decode(Started.self, from: startData) else {
+            throw ApiError.server("The reconstruct engine didn't return a job id (are you signed in as staff?).", 0)
+        }
         var misses = 0
         while true {
             try Task.checkCancellation()
-            try await Task.sleep(nanoseconds: 2_000_000_000)
+            try await Task.sleep(nanoseconds: 3_000_000_000)
             do {
-                let s: State = try await Api.shared.get("\(startPath)/" + start.id); misses = 0
-                if s.status == "error" { throw ApiError.server(s.error ?? "Reconstruction failed.", 0) }
-                if s.status == "done" { return s.url ?? "" }
-                await MainActor.run { progress(s.msg ?? "Reconstructing \(dylib)…") }
+                let job: Job = try await Api.shared.get("\(base)/jobs/\(started.id)"); misses = 0
+                if let line = job.log?.last { await MainActor.run { progress(line) } }
+                if job.state == "error" {
+                    throw ApiError.server(job.items?.first?.error ?? "Reconstruction failed.", 0)
+                }
+                if job.state == "done" {
+                    let part = job.items?.first?.parts?.first
+                    let dyl = part?.dylibName ?? part?.name ?? name
+                    return ReconResult(dylibName: dyl, summary: "Reconstructed \(dyl)",
+                                       downloadPath: "\(base)/jobs/\(started.id)/download?item=0&part=0")
+                }
             } catch let e as ApiError where e.status == 0 { throw e }
-            catch { misses += 1; if misses > 60 { throw error } }
+            catch { misses += 1; if misses > 200 { throw error } }   // tolerate long Ghidra runs
         }
     }
 }

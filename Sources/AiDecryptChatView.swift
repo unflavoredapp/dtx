@@ -50,6 +50,7 @@ struct AiChatMessage: Identifiable, Equatable {
 enum AiCard: Equatable {
     case apps([AppPick])
     case libraries(LibrariesCard)
+    case reconResults([ReconResult])
 }
 
 struct AppPick: Identifiable, Equatable {
@@ -61,6 +62,7 @@ struct AppPick: Identifiable, Equatable {
     let version: String
     let repoName: String
     let storeID: String?    // filled from the repo entry's App Store id when available
+    let ipaURL: String?     // the current version's (already-decrypted repo) IPA, to read dylibs from
 }
 
 struct LibPick: Identifiable, Equatable {
@@ -75,6 +77,7 @@ struct LibrariesCard: Equatable {
     let appName: String
     let version: String       // the saved set's version these libs came from
     let storeID: String?
+    let ipaURL: String?       // repo IPA to extract dylibs from when there's no newer build to decrypt
     let items: [LibPick]
     let hasUpdate: Bool
     let storeVersion: String?
@@ -426,7 +429,7 @@ final class AiDecryptViewModel: ObservableObject {
                            messages[assistantIndex].content.isEmpty || messages[assistantIndex].content.hasPrefix("Running ") {
                             messages.remove(at: assistantIndex)
                         }
-                        presentApps(query: query)
+                        await presentApps(query: query)
                         return
                     } else if call.name == "generate_image" {
                         let prompt = AiImageGen.extractPrompt(call.arguments)
@@ -458,21 +461,37 @@ final class AiDecryptViewModel: ObservableObject {
 
     // MARK: - Repo / decrypt / reconstruct flow (driven by search_apps + card taps)
 
-    /// Runs the local app search and shows the matches as a tappable card. Returns how many it showed,
-    /// so the text turn can give the model a short tool result.
-    @discardableResult
-    func presentApps(query: String) -> Int {
+    /// Runs the local app search and shows the matches as a tappable card. Loads the repo library first if it
+    /// hasn't been fetched yet (e.g. the chat was opened before the Library tab ever populated store.apps).
+    func presentApps(query: String) async {
+        // Make sure the library is actually loaded — store.apps is empty until store.refresh() has run.
+        if (store?.apps.isEmpty ?? true), let store {
+            messages.append(AiChatMessage(role: .assistant, content: "Loading your repo library…"))
+            let loadingIndex = messages.count - 1
+            await store.refresh()
+            if loadingIndex < messages.count { messages.remove(at: loadingIndex) }
+        }
         let apps = store?.apps ?? []
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        let matches = AppSearcher.filter(apps, q).prefix(8)
+        guard !apps.isEmpty else {
+            let why = store?.message.map { " (\($0))" } ?? ""
+            messages.append(AiChatMessage(role: .assistant, content:
+                "Your library has no apps loaded\(why). Add or refresh your repos in the Library tab, then try again."))
+            return
+        }
+
+        let cleaned = query.trimmingCharacters(in: CharacterSet.alphanumerics.inverted.union(.whitespaces)).trimmingCharacters(in: .whitespaces)
+        let showAll = cleaned.count < 2   // "show all apps" / "." / empty → just list some
+        let matches = showAll ? Array(apps.prefix(12)) : Array(AppSearcher.filter(apps, cleaned.lowercased()).prefix(12))
         let picks = matches.map { a in
             AppPick(id: a.id, name: a.name, developer: a.developer, icon: a.icon, bid: a.bid,
-                    version: a.current?.version ?? "", repoName: a.repoName, storeID: Self.storeID(from: a))
+                    version: a.current?.version ?? "", repoName: a.repoName, storeID: Self.storeID(from: a),
+                    ipaURL: a.current?.url?.absoluteString)
         }
-        var msg = AiChatMessage(role: .assistant, content: picks.isEmpty ? "No apps in your library match “\(query).”" : "Tap the app you want:")
-        if !picks.isEmpty { msg.card = .apps(Array(picks)) }
+        var msg = AiChatMessage(role: .assistant, content: picks.isEmpty
+            ? "No apps in your library (\(apps.count) total) match “\(query).”"
+            : (showAll ? "Showing \(picks.count) of \(apps.count) apps — tap one:" : "Tap the app you want:"))
+        if !picks.isEmpty { msg.card = .apps(picks) }
         messages.append(msg)
-        return picks.count
     }
 
     /// Tapped an app → load its saved dylibs/frameworks and whether a newer App Store build exists, then show
@@ -495,6 +514,7 @@ final class AiDecryptViewModel: ObservableObject {
                 let card = LibrariesCard(
                     bid: pick.bid, appName: pick.name, version: set.version,
                     storeID: pick.storeID ?? update?.storeID,
+                    ipaURL: pick.ipaURL,
                     items: items,
                     hasUpdate: update?.hasUpdate ?? false,
                     storeVersion: update?.storeVersion
@@ -507,8 +527,9 @@ final class AiDecryptViewModel: ObservableObject {
         }
     }
 
-    /// Selected dylibs + tapped the action → decrypt the latest build (when there's an update / a store id) and
-    /// reconstruct each selected library, streaming progress into the chat.
+    /// Selected dylibs + tapped the action → get a decrypted IPA (decrypt the latest build when there's an update,
+    /// else use the repo IPA), pull each chosen dylib out of it, and run the reconstruction engine on each,
+    /// streaming progress and ending with a card of downloadable recovered projects.
     func decryptAndReconstruct(_ card: LibrariesCard, selected: [LibPick]) {
         guard !isStreaming, !selected.isEmpty else { return }
         isStreaming = true
@@ -517,31 +538,60 @@ final class AiDecryptViewModel: ObservableObject {
         flowTask = Task {
             defer { isStreaming = false }
             do {
-                // 1. Get a decrypted IPA to reconstruct from. If a newer store build exists (or we have a store id),
-                //    decrypt the latest; otherwise the backend reconstruct uses the saved set for this bid/version.
-                var ipaURL = ""
-                if let storeID = card.storeID, card.hasUpdate || card.version.isEmpty {
+                // 1. Which IPA do we read the dylibs from? A newer App Store build → decrypt it; otherwise the repo IPA.
+                var ipaString = card.ipaURL ?? ""
+                if let storeID = card.storeID, card.hasUpdate {
                     messages[index].content = "Decrypting the latest build of \(card.appName)…"
-                    ipaURL = try await AiRepoTools.decryptLatest(storeID: storeID, version: card.storeVersion) { [weak self] line in
+                    ipaString = try await AiRepoTools.decryptLatest(storeID: storeID, version: card.storeVersion) { [weak self] line in
                         self?.messages[index].content = line
                     }
                 }
-                // 2. Reconstruct each selected library.
-                var done: [String] = []
+                guard let ipaURL = URL(string: ipaString), ipaURL.scheme == "https" else {
+                    messages[index].content = "No decrypted IPA available for \(card.appName) to pull libraries from."
+                    return
+                }
+
+                // 2. Open the IPA once, then extract + reconstruct each selected library.
+                messages[index].content = "Opening \(card.appName)'s package…"
+                let zip = try await RemoteZip.open(ipaURL)
+                var results: [ReconResult] = []
                 for lib in selected {
-                    messages[index].content = "Reconstructing \(lib.name)…"
-                    let out = try await ReconstructAPI.run(ipaURL: ipaURL, dylib: lib.name) { [weak self] line in
-                        self?.messages[index].content = line
+                    guard let entry = Self.machOEntry(for: lib, in: zip) else {
+                        results.append(ReconResult(dylibName: lib.name, summary: "\(lib.name): not found inside the package", downloadPath: nil))
+                        continue
                     }
-                    done.append(out.isEmpty ? lib.name : "\(lib.name) → \(out)")
+                    messages[index].content = "Extracting \(lib.name)…"
+                    let bytes = try await zip.read(entry, limit: 200_000_000)
+                    let r = try await ReconstructAPI.reconstruct(name: lib.name, data: bytes) { [weak self] line in
+                        self?.messages[index].content = "\(lib.name): \(line)"
+                    }
+                    results.append(r)
                 }
-                messages[index].content = "Reconstructed \(done.count) \(done.count == 1 ? "library" : "libraries") from \(card.appName):\n" + done.map { "• \($0)" }.joined(separator: "\n")
+                messages[index].content = "Reconstructed \(results.filter { $0.downloadPath != nil }.count) of \(selected.count) from \(card.appName):"
+                messages[index].card = .reconResults(results)
             } catch is CancellationError {
                 messages[index].content = "Cancelled."
             } catch {
                 messages[index].content = "Stopped: \(error.localizedDescription)"
             }
         }
+    }
+
+    /// Locates the Mach-O entry inside the IPA for a chosen library. A framework's binary is `X.framework/X`
+    /// (no extension); a dylib is matched by its filename.
+    private static func machOEntry(for lib: LibPick, in zip: RemoteZip) -> ZipEntry? {
+        if lib.type == "framework" {
+            let fwBase = lib.name.replacingOccurrences(of: ".framework", with: "")
+            return zip.entries.first { !$0.isFolder && ($0.name.hasSuffix("/\(lib.name)/\(fwBase)") || $0.name.hasSuffix("\(lib.name)/\(fwBase)")) }
+        }
+        return zip.entries.first { !$0.isFolder && ($0.name.hasSuffix("/\(lib.name)") || $0.name == lib.name) }
+    }
+
+    /// Downloads a recovered project zip (staff-gated) to a temp file and returns it, for sharing/saving.
+    func downloadRecovered(_ result: ReconResult) async -> URL? {
+        guard let path = result.downloadPath else { return nil }
+        let name = result.dylibName.replacingOccurrences(of: ".", with: "_") + "-recovered.zip"
+        return try? await FileDownloader().download(path: path, name: name) { _ in }
     }
 
     /// The App Store numeric id for an app, if its repo download URL or bundle id exposes one. Best-effort;
@@ -747,6 +797,12 @@ struct AiDecryptChatView: View {
         case .libraries(let lib):
             AiLibrariesCard(card: lib, isBusy: viewModel.isStreaming) { selected in
                 viewModel.decryptAndReconstruct(lib, selected: selected)
+            }
+        case .reconResults(let results):
+            AiReconResultsCard(results: results) { result in
+                Task {
+                    if let url = await viewModel.downloadRecovered(result) { SharePresenter.present(url) }
+                }
             }
         }
     }

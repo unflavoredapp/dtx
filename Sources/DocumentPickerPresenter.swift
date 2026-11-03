@@ -40,7 +40,7 @@ enum DocumentPickerPresenter {
         top.present(picker, animated: true)
     }
 
-    private static func topViewController() -> UIViewController? {
+    static func topViewController() -> UIViewController? {
         let keyWindow = UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .flatMap { $0.windows }
@@ -48,5 +48,17 @@ enum DocumentPickerPresenter {
         var top = keyWindow?.rootViewController
         while let presented = top?.presentedViewController { top = presented }
         return top
+    }
+}
+
+/// Presents a share sheet (UIActivityViewController) imperatively on the top-most controller — same reason as
+/// the document picker: it works reliably on top of the already-presented Ai-Decrypt sheet.
+enum SharePresenter {
+    static func present(_ url: URL) {
+        let vc = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        guard let top = DocumentPickerPresenter.topViewController() else { return }
+        vc.popoverPresentationController?.sourceView = top.view
+        vc.popoverPresentationController?.sourceRect = CGRect(x: top.view.bounds.midX, y: top.view.bounds.midY, width: 0, height: 0)
+        top.present(vc, animated: true)
     }
 }

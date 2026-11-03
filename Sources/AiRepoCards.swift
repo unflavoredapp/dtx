@@ -104,3 +104,44 @@ struct AiLibrariesCard: View {
         if selected.contains(id) { selected.remove(id) } else { selected.insert(id) }
     }
 }
+
+/// Results of a reconstruction run: each recovered library with a button to download its project zip.
+struct AiReconResultsCard: View {
+    let results: [ReconResult]
+    let onDownload: (ReconResult) -> Void
+
+    @State private var downloading: String?
+
+    var body: some View {
+        VStack(spacing: 6) {
+            ForEach(results, id: \.dylibName) { r in
+                HStack(spacing: 10) {
+                    Image(systemName: r.downloadPath != nil ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(r.downloadPath != nil ? Color.dtAccent : .orange)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(r.dylibName).font(.footnote.weight(.medium)).foregroundStyle(.white).lineLimit(1)
+                        Text(r.summary).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                    Spacer(minLength: 0)
+                    if r.downloadPath != nil {
+                        Button {
+                            downloading = r.dylibName
+                            onDownload(r)
+                        } label: {
+                            if downloading == r.dylibName {
+                                ProgressView().scaleEffect(0.7)
+                            } else {
+                                Image(systemName: "square.and.arrow.down").foregroundStyle(Color.dtAccent)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 10).padding(.vertical, 8)
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.05)))
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(Color.dtLine))
+            }
+        }
+        .onChange(of: results) { _ in downloading = nil }
+    }
+}
