@@ -326,7 +326,14 @@ struct AiDecryptChatView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.plainText, .sourceCode, .json, .zip, .item], allowsMultipleSelection: true) { result in
+        .fileImporter(
+            isPresented: $showFilePicker,
+            // `.item` looks like it should match anything, but the system picker greys out files whose declared
+            // type doesn't conform to something concrete in this list — a bare .dylib often has no registered
+            // UTI at all. `.data` (and an explicit dylib type) is the catch-all that actually keeps them selectable.
+            allowedContentTypes: [.plainText, .sourceCode, .json, .zip, UTType(filenameExtension: "dylib") ?? .data, .data],
+            allowsMultipleSelection: true
+        ) { result in
             guard case .success(let urls) = result else { return }
             for url in urls {
                 guard url.startAccessingSecurityScopedResource() else { continue }
