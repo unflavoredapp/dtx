@@ -42,6 +42,42 @@ struct AiChatMessage: Identifiable, Equatable {
     /// Set on a `tool` message: which call this is the result of.
     var toolCallId: String? = nil
     var name: String? = nil
+    /// An interactive card shown under this message (app picker, dylib picker). See AiRepoCards.swift.
+    var card: AiCard? = nil
+}
+
+/// Interactive cards the repo/decrypt flow shows in the chat.
+enum AiCard: Equatable {
+    case apps([AppPick])
+    case libraries(LibrariesCard)
+}
+
+struct AppPick: Identifiable, Equatable {
+    let id: String          // AppEntry.id
+    let name: String
+    let developer: String
+    let icon: URL?
+    let bid: String
+    let version: String
+    let repoName: String
+    let storeID: String?    // filled from the repo entry's App Store id when available
+}
+
+struct LibPick: Identifiable, Equatable {
+    var id: String { name }
+    let name: String
+    let type: String        // "dylib" / "framework"
+    let size: Int64
+}
+
+struct LibrariesCard: Equatable {
+    let bid: String
+    let appName: String
+    let version: String       // the saved set's version these libs came from
+    let storeID: String?
+    let items: [LibPick]
+    let hasUpdate: Bool
+    let storeVersion: String?
 }
 
 struct AiAttachment: Identifiable, Equatable {
@@ -173,7 +209,12 @@ final class AiDecryptViewModel: ObservableObject {
     @Published var pendingImage: AiImageAttachment?
     @Published var isFetchingWebpage = false
 
+    /// The app's shared repo state, set by the view, so the model's search_apps tool and the card taps can read
+    /// the loaded app library and drive the backend flow.
+    weak var store: RepoStore?
+
     private var streamTask: Task<Void, Never>?
+    private var flowTask: Task<Void, Never>?
     private var pendingAppend = ""
     private var flushTask: Task<Void, Never>?
 
@@ -279,7 +320,7 @@ final class AiDecryptViewModel: ObservableObject {
         streamTask = Task { await self.runTurn() }
     }
 
-    func cancel() { streamTask?.cancel(); isStreaming = false }
+    func cancel() { streamTask?.cancel(); flowTask?.cancel(); isStreaming = false }
 
     func newChat() { cancel(); messages = []; errorText = nil; removeBinaryAttachment(); removeImage() }
 
@@ -294,28 +335,77 @@ final class AiDecryptViewModel: ObservableObject {
                 "answer the person. You don't need a link or any other input; they already operate on the attached file."
             ))
         }
+        if messages.prefix(index).contains(where: { $0.imageData != nil }) {
+            // The vision model can't call tools, so it asks for an image via this marker instead.
+            out.append(AiChatMessage(role: .system, content:
+                "You can see the attached image. If the person asks you to generate, create, draw, redesign, " +
+                "re-create, or mock up an image, do NOT say you can't make images. Instead reply with exactly " +
+                "`[GENERATE]` followed by one detailed text-to-image prompt describing the desired result, then " +
+                "`[/GENERATE]`, and nothing else — the app turns that into an image built from the attached photo. " +
+                "For any other request, just answer normally about the image."
+            ))
+        }
         out += Array(messages.prefix(index))
         return out
     }
 
-    /// One assistant turn, following any tool calls it makes until it gives a normal reply (or a small loop cap is hit).
-    /// A turn whose history includes a photo is routed to the vision model/endpoint instead of the text one.
+    /// A photo in the history routes the turn to the vision model (which sees images but can't tool-call);
+    /// otherwise the text model handles it (which tool-calls reliably but sees no images).
     private func runTurn() async {
-        let usesVision = messages.contains { $0.imageData != nil }
+        if messages.contains(where: { $0.imageData != nil }) {
+            await runVisionTurn()
+        } else {
+            await runTextTurn()
+        }
+        isStreaming = false
+    }
+
+    /// Vision turn. The vision model can't call tools, so when the person wants an image made from what's
+    /// attached, it emits a `[GENERATE]…[/GENERATE]` marker instead; we detect that and run img2img on the
+    /// attached photo. Any other request just gets its text answer.
+    private func runVisionTurn() async {
+        let assistantIndex = messages.count
+        messages.append(AiChatMessage(role: .assistant, content: ""))
+        do {
+            _ = try await AiDecryptAPI.streamChat(
+                messages: apiMessages(upTo: assistantIndex),
+                tools: nil,
+                endpoint: AiDecryptAPI.visionEndpoint,
+                model: AiDecryptAPI.visionModel
+            ) { [weak self] delta in self?.appendThrottled(delta, at: assistantIndex) }
+            flushNow(at: assistantIndex)
+
+            if let prompt = AiImageGen.extractGenerateDirective(messages[assistantIndex].content),
+               let source = latestUserImage() {
+                messages[assistantIndex].content = "Generating…"
+                do {
+                    let img = try await AiImageGen.editImage(prompt: prompt, imageData: source)
+                    messages[assistantIndex].imageData = img
+                    messages[assistantIndex].content = ""   // the image is the answer
+                } catch {
+                    messages[assistantIndex].content = "I tried to generate that, but the image server errored: \(error.localizedDescription)"
+                }
+            }
+        } catch {
+            errorText = error.localizedDescription
+        }
+    }
+
+    /// Text turn, following any tool calls (generate_image, plus the bundled analyzers when a file is attached)
+    /// until the model gives a normal reply or the loop cap is hit.
+    private func runTextTurn() async {
         var loops = 0
         while loops < 4 {
             loops += 1
             let assistantIndex = messages.count
             messages.append(AiChatMessage(role: .assistant, content: ""))
             do {
-                var tools: [[String: Any]] = [AiImageGen.schema]
-                if !usesVision, binaryAttachment != nil { tools += AiToolBridge.toolSchemas() }
+                var tools: [[String: Any]] = [AiImageGen.schema, AiRepoTools.searchAppsSchema]
+                if binaryAttachment != nil { tools += AiToolBridge.toolSchemas() }
 
                 let calls = try await AiDecryptAPI.streamChat(
                     messages: apiMessages(upTo: assistantIndex),
-                    tools: tools,
-                    endpoint: usesVision ? AiDecryptAPI.visionEndpoint : AiDecryptAPI.endpoint,
-                    model: usesVision ? AiDecryptAPI.visionModel : AiDecryptAPI.model
+                    tools: tools
                 ) { [weak self] delta in self?.appendThrottled(delta, at: assistantIndex) }
                 flushNow(at: assistantIndex)
 
@@ -327,7 +417,18 @@ final class AiDecryptViewModel: ObservableObject {
                 }
 
                 for call in calls {
-                    if call.name == "generate_image" {
+                    if call.name == "search_apps" {
+                        // The model only starts the flow; the tappable cards + taps drive everything after, so we
+                        // show the card and end the turn (no model follow-up). Drop the "Running…" placeholder the
+                        // loop created so the card message stands on its own.
+                        let query = AiRepoTools.extractQuery(call.arguments)
+                        if assistantIndex < messages.count,
+                           messages[assistantIndex].content.isEmpty || messages[assistantIndex].content.hasPrefix("Running ") {
+                            messages.remove(at: assistantIndex)
+                        }
+                        presentApps(query: query)
+                        return
+                    } else if call.name == "generate_image" {
                         let prompt = AiImageGen.extractPrompt(call.arguments)
                         do {
                             let imgData = try await AiImageGen.generate(prompt: prompt)
@@ -349,7 +450,109 @@ final class AiDecryptViewModel: ObservableObject {
                 break
             }
         }
-        isStreaming = false
+    }
+
+    private func latestUserImage() -> Data? {
+        messages.last { $0.role == .user && $0.imageData != nil }?.imageData
+    }
+
+    // MARK: - Repo / decrypt / reconstruct flow (driven by search_apps + card taps)
+
+    /// Runs the local app search and shows the matches as a tappable card. Returns how many it showed,
+    /// so the text turn can give the model a short tool result.
+    @discardableResult
+    func presentApps(query: String) -> Int {
+        let apps = store?.apps ?? []
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        let matches = AppSearcher.filter(apps, q).prefix(8)
+        let picks = matches.map { a in
+            AppPick(id: a.id, name: a.name, developer: a.developer, icon: a.icon, bid: a.bid,
+                    version: a.current?.version ?? "", repoName: a.repoName, storeID: Self.storeID(from: a))
+        }
+        var msg = AiChatMessage(role: .assistant, content: picks.isEmpty ? "No apps in your library match “\(query).”" : "Tap the app you want:")
+        if !picks.isEmpty { msg.card = .apps(Array(picks)) }
+        messages.append(msg)
+        return picks.count
+    }
+
+    /// Tapped an app → load its saved dylibs/frameworks and whether a newer App Store build exists, then show
+    /// the dylib picker card.
+    func tapApp(_ pick: AppPick) {
+        guard !isStreaming else { return }
+        messages.append(AiChatMessage(role: .assistant, content: "Loading \(pick.name)'s libraries…"))
+        let index = messages.count - 1
+        flowTask = Task {
+            do {
+                async let setsCall = AiRepoTools.libraries(bid: pick.bid)
+                async let updateCall = try? AiRepoTools.updateInfo(bid: pick.bid)
+                let sets = try await setsCall
+                let update = await updateCall
+                guard let set = sets.first else {
+                    messages[index].content = "No saved dylibs or frameworks for \(pick.name) yet."
+                    return
+                }
+                let items = set.items.map { LibPick(name: $0.name, type: $0.type, size: $0.size) }
+                let card = LibrariesCard(
+                    bid: pick.bid, appName: pick.name, version: set.version,
+                    storeID: pick.storeID ?? update?.storeID,
+                    items: items,
+                    hasUpdate: update?.hasUpdate ?? false,
+                    storeVersion: update?.storeVersion
+                )
+                messages[index].content = "\(pick.name) — pick the libraries to decrypt & reconstruct:"
+                messages[index].card = .libraries(card)
+            } catch {
+                messages[index].content = "Couldn't load \(pick.name)'s libraries: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Selected dylibs + tapped the action → decrypt the latest build (when there's an update / a store id) and
+    /// reconstruct each selected library, streaming progress into the chat.
+    func decryptAndReconstruct(_ card: LibrariesCard, selected: [LibPick]) {
+        guard !isStreaming, !selected.isEmpty else { return }
+        isStreaming = true
+        messages.append(AiChatMessage(role: .assistant, content: "Starting…"))
+        let index = messages.count - 1
+        flowTask = Task {
+            defer { isStreaming = false }
+            do {
+                // 1. Get a decrypted IPA to reconstruct from. If a newer store build exists (or we have a store id),
+                //    decrypt the latest; otherwise the backend reconstruct uses the saved set for this bid/version.
+                var ipaURL = ""
+                if let storeID = card.storeID, card.hasUpdate || card.version.isEmpty {
+                    messages[index].content = "Decrypting the latest build of \(card.appName)…"
+                    ipaURL = try await AiRepoTools.decryptLatest(storeID: storeID, version: card.storeVersion) { [weak self] line in
+                        self?.messages[index].content = line
+                    }
+                }
+                // 2. Reconstruct each selected library.
+                var done: [String] = []
+                for lib in selected {
+                    messages[index].content = "Reconstructing \(lib.name)…"
+                    let out = try await ReconstructAPI.run(ipaURL: ipaURL, dylib: lib.name) { [weak self] line in
+                        self?.messages[index].content = line
+                    }
+                    done.append(out.isEmpty ? lib.name : "\(lib.name) → \(out)")
+                }
+                messages[index].content = "Reconstructed \(done.count) \(done.count == 1 ? "library" : "libraries") from \(card.appName):\n" + done.map { "• \($0)" }.joined(separator: "\n")
+            } catch is CancellationError {
+                messages[index].content = "Cancelled."
+            } catch {
+                messages[index].content = "Stopped: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// The App Store numeric id for an app, if its repo download URL or bundle id exposes one. Best-effort;
+    /// the update check also returns a store id when the repo doesn't carry one.
+    private static func storeID(from app: AppEntry) -> String? {
+        for v in app.versions {
+            guard let s = v.url?.absoluteString, let r = s.range(of: "/id") else { continue }
+            let digits = String(s[r.upperBound...].prefix(while: { $0.isNumber }))
+            if !digits.isEmpty { return digits }
+        }
+        return nil
     }
 
     /// Batches token deltas and flushes at ~10fps instead of re-rendering on every token.
@@ -375,6 +578,7 @@ final class AiDecryptViewModel: ObservableObject {
 
 struct AiDecryptChatView: View {
     @StateObject private var viewModel = AiDecryptViewModel()
+    @EnvironmentObject private var store: RepoStore
     @Environment(\.dismiss) private var dismiss
     @FocusState private var inputFocused: Bool
     @State private var showWebpageAlert = false
@@ -411,6 +615,7 @@ struct AiDecryptChatView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .onAppear { viewModel.store = store }
         .alert("Attach webpage", isPresented: $showWebpageAlert) {
             TextField("https://example.com", text: $webpageURL)
                 .textInputAutocapitalization(.never)
@@ -516,7 +721,13 @@ struct AiDecryptChatView: View {
             ScrollView {
                 LazyVStack(spacing: 10) {
                     ForEach(viewModel.messages.filter { $0.role == .user || $0.role == .assistant }) { message in
-                        AiMessageBubble(message: message).id(message.id)
+                        VStack(alignment: .leading, spacing: 8) {
+                            if !message.content.isEmpty || message.imageData != nil {
+                                AiMessageBubble(message: message)
+                            }
+                            if let card = message.card { cardView(card) }
+                        }
+                        .id(message.id)
                     }
                 }
                 .padding(14)
@@ -524,6 +735,18 @@ struct AiDecryptChatView: View {
             .onChange(of: viewModel.messages.last?.content) { _ in
                 guard let last = viewModel.messages.last(where: { $0.role == .user || $0.role == .assistant }) else { return }
                 withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(last.id, anchor: .bottom) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func cardView(_ card: AiCard) -> some View {
+        switch card {
+        case .apps(let picks):
+            AiAppsCard(picks: picks) { pick in viewModel.tapApp(pick) }
+        case .libraries(let lib):
+            AiLibrariesCard(card: lib, isBusy: viewModel.isStreaming) { selected in
+                viewModel.decryptAndReconstruct(lib, selected: selected)
             }
         }
     }
@@ -669,5 +892,5 @@ private struct AiCodeBlockView: View {
 }
 
 #Preview {
-    AiDecryptChatView()
+    AiDecryptChatView().environmentObject(RepoStore())
 }
