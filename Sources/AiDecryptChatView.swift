@@ -380,6 +380,7 @@ struct AiDecryptChatView: View {
     @State private var showWebpageAlert = false
     @State private var webpageURL = ""
     @State private var photoItem: PhotosPickerItem?
+    @State private var showPhotoPicker = false
 
     var body: some View {
         NavigationStack {
@@ -448,10 +449,19 @@ struct AiDecryptChatView: View {
                 }
             }
         }
+        // A PhotosPicker placed directly as a row inside a Menu's content closure doesn't reliably present its
+        // sheet on device — Menu intercepts the tap as a plain row selection instead of forwarding it. Triggering
+        // it from a regular button via this modifier (the same pattern as .fileImporter above) is the fix.
+        .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
         .onChange(of: photoItem) { _ in
             guard let item = photoItem else { return }
             Task {
-                if let data = try? await item.loadTransferable(type: Data.self) { viewModel.setImage(data) }
+                guard let data = try? await item.loadTransferable(type: Data.self) else {
+                    viewModel.errorText = "Couldn't load that photo."
+                    photoItem = nil
+                    return
+                }
+                viewModel.setImage(data)
                 photoItem = nil
             }
         }
@@ -545,7 +555,7 @@ struct AiDecryptChatView: View {
         HStack(spacing: 8) {
             Menu {
                 Button { showFilePicker = true } label: { Label("Upload files", systemImage: "paperclip") }
-                PhotosPicker(selection: $photoItem, matching: .images) { Label("Attach photo", systemImage: "photo") }
+                Button { showPhotoPicker = true } label: { Label("Attach photo", systemImage: "photo") }
                 Button { showWebpageAlert = true } label: { Label("Attach webpage", systemImage: "globe") }
             } label: {
                 Image(systemName: "plus")
