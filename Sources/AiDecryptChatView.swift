@@ -9,6 +9,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Model
 
@@ -17,6 +18,12 @@ struct AiChatMessage: Identifiable, Equatable {
     let id = UUID()
     let role: Role
     var content: String
+}
+
+struct AiAttachment: Identifiable, Equatable {
+    let id = UUID()
+    let name: String
+    let content: String
 }
 
 // MARK: - API client
@@ -74,16 +81,66 @@ final class AiDecryptViewModel: ObservableObject {
     @Published var draft = ""
     @Published var isStreaming = false
     @Published var errorText: String?
+    @Published var pendingAttachments: [AiAttachment] = []
+    @Published var isFetchingWebpage = false
 
     private var streamTask: Task<Void, Never>?
     private var pendingAppend = ""
     private var flushTask: Task<Void, Never>?
 
+    func addFile(name: String, content: String) {
+        pendingAttachments.append(AiAttachment(name: name, content: content))
+    }
+
+    func removeAttachment(_ attachment: AiAttachment) {
+        pendingAttachments.removeAll { $0.id == attachment.id }
+    }
+
+    func attachWebpage(_ urlString: String) {
+        var urlString = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !urlString.lowercased().hasPrefix("http") { urlString = "https://" + urlString }
+        guard let url = URL(string: urlString) else {
+            errorText = "That doesn't look like a valid URL."
+            return
+        }
+        isFetchingWebpage = true
+        Task {
+            defer { isFetchingWebpage = false }
+            do {
+                let (data, _) = try await URLSession.shared.data(from: url)
+                let html = String(data: data, encoding: .utf8) ?? ""
+                let text = Self.stripHTML(html)
+                let truncated = text.count > 6000 ? String(text.prefix(6000)) + "\n…(truncated)" : text
+                addFile(name: url.host ?? urlString, content: truncated)
+            } catch {
+                errorText = "Couldn't fetch that page: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private static func stripHTML(_ html: String) -> String {
+        var text = html
+        text = text.replacingOccurrences(of: #"<script[\s\S]*?</script>"#, with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"<style[\s\S]*?</style>"#, with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"<[^>]+>"#, with: " ", options: .regularExpression)
+        text = text.replacingOccurrences(of: "&nbsp;", with: " ")
+        text = text.replacingOccurrences(of: "&amp;", with: "&")
+        text = text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !isStreaming else { return }
+        guard !text.isEmpty || !pendingAttachments.isEmpty, !isStreaming else { return }
 
-        messages.append(AiChatMessage(role: .user, content: text))
+        var fullText = text
+        if !pendingAttachments.isEmpty {
+            let blocks = pendingAttachments.map { "--- file: \($0.name) ---\n\($0.content)\n" }.joined(separator: "\n")
+            fullText = blocks + (text.isEmpty ? "" : "\n" + text)
+        }
+        pendingAttachments = []
+
+        messages.append(AiChatMessage(role: .user, content: fullText))
         draft = ""
         errorText = nil
 
@@ -133,12 +190,16 @@ struct AiDecryptChatView: View {
     @StateObject private var viewModel = AiDecryptViewModel()
     @Environment(\.dismiss) private var dismiss
     @FocusState private var inputFocused: Bool
+    @State private var showFilePicker = false
+    @State private var showWebpageAlert = false
+    @State private var webpageURL = ""
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 messageList
                 if let error = viewModel.errorText { errorBanner(error) }
+                if !viewModel.pendingAttachments.isEmpty { attachmentChips }
                 composer
             }
             .background(AppBackground())
@@ -155,6 +216,49 @@ struct AiDecryptChatView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.plainText, .sourceCode, .json, .item], allowsMultipleSelection: true) { result in
+            guard case .success(let urls) = result else { return }
+            for url in urls {
+                guard url.startAccessingSecurityScopedResource() else { continue }
+                defer { url.stopAccessingSecurityScopedResource() }
+                if let data = try? Data(contentsOf: url), let text = String(data: data, encoding: .utf8) {
+                    viewModel.addFile(name: url.lastPathComponent, content: text)
+                }
+            }
+        }
+        .alert("Attach webpage", isPresented: $showWebpageAlert) {
+            TextField("https://example.com", text: $webpageURL)
+                .textInputAutocapitalization(.never)
+                .keyboardType(.URL)
+            Button("Cancel", role: .cancel) { webpageURL = "" }
+            Button("Attach") { viewModel.attachWebpage(webpageURL); webpageURL = "" }
+        } message: {
+            Text("Its text content will be added as context for your next message.")
+        }
+    }
+
+    private var attachmentChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(viewModel.pendingAttachments) { att in
+                    HStack(spacing: 6) {
+                        Image(systemName: "doc.text").font(.caption2)
+                        Text(att.name).font(.caption2).lineLimit(1)
+                        Button { viewModel.removeAttachment(att) } label: {
+                            Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
+                        }
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .glowCapsule()
+                }
+                if viewModel.isFetchingWebpage {
+                    ProgressView().scaleEffect(0.7)
+                }
+            }
+            .padding(.horizontal, 12)
+        }
+        .padding(.top, 6)
     }
 
     private var messageList: some View {
@@ -184,6 +288,16 @@ struct AiDecryptChatView: View {
 
     private var composer: some View {
         HStack(spacing: 8) {
+            Menu {
+                Button { showFilePicker = true } label: { Label("Upload files", systemImage: "paperclip") }
+                Button { showWebpageAlert = true } label: { Label("Attach webpage", systemImage: "globe") }
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 30, height: 30)
+            }
+
             TextField("Message Ai-Decrypt...", text: $viewModel.draft, axis: .vertical)
                 .font(.subheadline)
                 .foregroundStyle(.white)
@@ -202,7 +316,7 @@ struct AiDecryptChatView: View {
                     .frame(width: 30, height: 30)
                     .background(Circle().fill(Color.dtAccent))
             }
-            .disabled(viewModel.draft.trimmingCharacters(in: .whitespaces).isEmpty && !viewModel.isStreaming)
+            .disabled(viewModel.draft.trimmingCharacters(in: .whitespaces).isEmpty && viewModel.pendingAttachments.isEmpty && !viewModel.isStreaming)
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
         .overlay(Divider().overlay(Color.dtLine), alignment: .top)
