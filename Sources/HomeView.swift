@@ -16,6 +16,7 @@ struct HomeView: View {
                     LiveBannerView()
                     tools
                     if store.onlyDefault { repoNotice }
+                    aiDecryptCard
                     statsRow
                     changelogCard
                     activityCard
@@ -70,6 +71,30 @@ struct HomeView: View {
             .padding(.vertical, 10).padding(.horizontal, 4)
             .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Color.white.opacity(0.065)))
             .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Color.white.opacity(0.1)))
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: Ai-Decrypt card
+
+    private var aiDecryptCard: some View {
+        Button { store.showAiDecrypt = true } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "message.fill")
+                    .font(.system(size: 16, weight: .semibold)).foregroundStyle(.black)
+                    .frame(width: 34, height: 34)
+                    .background(LinearGradient(colors: [Color(red: 0.941, green: 0.518, blue: 0.173), Color(red: 0.541, green: 0.239, blue: 0.059)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Ai-Decrypt").font(.subheadline.weight(.bold)).foregroundStyle(.white)
+                    Text("Chat with your AI assistant").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").font(.caption.weight(.bold)).foregroundStyle(Color(red: 0.941, green: 0.518, blue: 0.173))
+            }
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Color(red: 0.941, green: 0.518, blue: 0.173).opacity(0.1)))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color(red: 0.941, green: 0.518, blue: 0.173).opacity(0.5)))
         }
         .buttonStyle(.plain)
     }

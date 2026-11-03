@@ -59,6 +59,7 @@ struct RootView: View {
         }
         .sheet(isPresented: $store.showQuickBuild) { QuickBuildView() }
         .sheet(isPresented: $store.showTools) { ToolsHubView() }
+        .sheet(isPresented: $store.showAiDecrypt) { AiDecryptChatView() }
         .sheet(item: $store.pickedApp) { app in
             NavigationStack {
                 AppDetailView(app: app)

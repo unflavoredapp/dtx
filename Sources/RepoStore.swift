@@ -22,6 +22,7 @@ final class RepoStore: ObservableObject {
     @Published var pickedApp: AppEntry?
     func closeSearch() { searchOpen = false; searchText = "" }
     @Published var showTools = false
+    @Published var showAiDecrypt = false
 
     @AppStorage("dt.server") var server: String = "https://decrypt.team"
 
