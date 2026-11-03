@@ -385,10 +385,25 @@ struct AiDecryptChatView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
+                // Each presentation modifier is attached to a DIFFERENT subview on purpose. SwiftUI does not
+                // reliably honor several presentation modifiers (.fileImporter / .photosPicker / .alert) stacked
+                // on one view — especially when that view is itself inside a .sheet, as this whole screen is.
+                // Only one tends to win and the others silently never present or never fire their callback.
+                // Spreading them across messageList / composer / the outer view keeps all three working.
                 messageList
+                    .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
+                    .onChange(of: photoItem) { _ in handlePickedPhoto() }
                 if let error = viewModel.errorText { errorBanner(error) }
                 if !viewModel.pendingAttachments.isEmpty || viewModel.binaryAttachment != nil || viewModel.pendingImage != nil { attachmentChips }
                 composer
+                    .fileImporter(
+                        isPresented: $showFilePicker,
+                        // `.item` looks like it should match anything, but the system picker greys out files whose
+                        // declared type doesn't conform to something concrete in this list — a bare .dylib often has
+                        // no registered UTI at all. `.data` (plus an explicit dylib type) keeps them selectable.
+                        allowedContentTypes: [.plainText, .sourceCode, .json, .zip, UTType(filenameExtension: "dylib") ?? .data, .data],
+                        allowsMultipleSelection: true
+                    ) { handleFileImport($0) }
             }
             .background(AppBackground())
             .navigationBarTitleDisplayMode(.inline)
@@ -404,67 +419,6 @@ struct AiDecryptChatView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .fileImporter(
-            isPresented: $showFilePicker,
-            // `.item` looks like it should match anything, but the system picker greys out files whose declared
-            // type doesn't conform to something concrete in this list — a bare .dylib often has no registered
-            // UTI at all. `.data` (and an explicit dylib type) is the catch-all that actually keeps them selectable.
-            allowedContentTypes: [.plainText, .sourceCode, .json, .zip, UTType(filenameExtension: "dylib") ?? .data, .data],
-            allowsMultipleSelection: true
-        ) { result in
-            switch result {
-            case .failure(let error):
-                viewModel.errorText = "Couldn't open that file: \(error.localizedDescription)"
-            case .success(let urls):
-                if urls.isEmpty { viewModel.errorText = "No file came back from the picker." }
-                for url in urls {
-                    guard url.startAccessingSecurityScopedResource() else {
-                        viewModel.errorText = "Couldn't get permission to read \(url.lastPathComponent)."
-                        continue
-                    }
-                    defer { url.stopAccessingSecurityScopedResource() }
-                    do {
-                        // NSFileCoordinator (not a bare Data(contentsOf:)) makes sure an iCloud-only file
-                        // is actually downloaded first — otherwise this silently reads 0 bytes.
-                        var coordError: NSError?
-                        var data: Data?
-                        var readError: Error?
-                        NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordError) { readURL in
-                            do { data = try Data(contentsOf: readURL) } catch { readError = error }
-                        }
-                        if let coordError { throw coordError }
-                        if let readError { throw readError }
-                        guard let data else { throw ZipError("That file came back empty.") }
-
-                        let ext = url.pathExtension.lowercased()
-                        if ext == "zip" || ext == "ipa" || ext == "dylib" || String(data: data, encoding: .utf8) == nil {
-                            // a zip/IPA/dylib (or anything else that isn't plain text): give it to the tool system, not the prompt text
-                            viewModel.addBinaryFile(name: url.lastPathComponent, data: data)
-                        } else if let text = String(data: data, encoding: .utf8) {
-                            viewModel.addFile(name: url.lastPathComponent, content: text)
-                        }
-                    } catch {
-                        viewModel.errorText = "Couldn't read \(url.lastPathComponent): \(error.localizedDescription)"
-                    }
-                }
-            }
-        }
-        // A PhotosPicker placed directly as a row inside a Menu's content closure doesn't reliably present its
-        // sheet on device — Menu intercepts the tap as a plain row selection instead of forwarding it. Triggering
-        // it from a regular button via this modifier (the same pattern as .fileImporter above) is the fix.
-        .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
-        .onChange(of: photoItem) { _ in
-            guard let item = photoItem else { return }
-            Task {
-                guard let data = try? await item.loadTransferable(type: Data.self) else {
-                    viewModel.errorText = "Couldn't load that photo."
-                    photoItem = nil
-                    return
-                }
-                viewModel.setImage(data)
-                photoItem = nil
-            }
-        }
         .alert("Attach webpage", isPresented: $showWebpageAlert) {
             TextField("https://example.com", text: $webpageURL)
                 .textInputAutocapitalization(.never)
@@ -473,6 +427,58 @@ struct AiDecryptChatView: View {
             Button("Attach") { viewModel.attachWebpage(webpageURL); webpageURL = "" }
         } message: {
             Text("Its text content will be added as context for your next message.")
+        }
+    }
+
+    private func handleFileImport(_ result: Result<[URL], Error>) {
+        switch result {
+        case .failure(let error):
+            viewModel.errorText = "Couldn't open that file: \(error.localizedDescription)"
+        case .success(let urls):
+            if urls.isEmpty { viewModel.errorText = "No file came back from the picker." }
+            for url in urls {
+                guard url.startAccessingSecurityScopedResource() else {
+                    viewModel.errorText = "Couldn't get permission to read \(url.lastPathComponent)."
+                    continue
+                }
+                defer { url.stopAccessingSecurityScopedResource() }
+                do {
+                    // NSFileCoordinator (not a bare Data(contentsOf:)) makes sure an iCloud-only file
+                    // is actually downloaded first — otherwise this silently reads 0 bytes.
+                    var coordError: NSError?
+                    var data: Data?
+                    var readError: Error?
+                    NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordError) { readURL in
+                        do { data = try Data(contentsOf: readURL) } catch { readError = error }
+                    }
+                    if let coordError { throw coordError }
+                    if let readError { throw readError }
+                    guard let data else { throw ZipError("That file came back empty.") }
+
+                    let ext = url.pathExtension.lowercased()
+                    if ext == "zip" || ext == "ipa" || ext == "dylib" || String(data: data, encoding: .utf8) == nil {
+                        // a zip/IPA/dylib (or anything else that isn't plain text): give it to the tool system, not the prompt text
+                        viewModel.addBinaryFile(name: url.lastPathComponent, data: data)
+                    } else if let text = String(data: data, encoding: .utf8) {
+                        viewModel.addFile(name: url.lastPathComponent, content: text)
+                    }
+                } catch {
+                    viewModel.errorText = "Couldn't read \(url.lastPathComponent): \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func handlePickedPhoto() {
+        guard let item = photoItem else { return }
+        Task {
+            guard let data = try? await item.loadTransferable(type: Data.self) else {
+                viewModel.errorText = "Couldn't load that photo."
+                photoItem = nil
+                return
+            }
+            viewModel.setImage(data)
+            photoItem = nil
         }
     }
 
