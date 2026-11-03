@@ -402,7 +402,10 @@ struct AiDecryptChatView: View {
                         // declared type doesn't conform to something concrete in this list — a bare .dylib often has
                         // no registered UTI at all. `.data` (plus an explicit dylib type) keeps them selectable.
                         allowedContentTypes: [.plainText, .sourceCode, .json, .zip, UTType(filenameExtension: "dylib") ?? .data, .data],
-                        allowsMultipleSelection: true
+                        // Single-selection: with multiple-selection on, a single tap only previews the file and
+                        // Open returns an empty set (the "tap Open, nothing happens" bug). One zip/dylib at a time
+                        // is all the tool system needs anyway, and this returns the file the instant it's picked.
+                        allowsMultipleSelection: false
                     ) { handleFileImport($0) }
             }
             .background(AppBackground())
