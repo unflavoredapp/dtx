@@ -9,7 +9,7 @@ enum BuiltinTools {
         id: "app-info", name: "App Info", summary: "Bundle ID, versions, permissions, URL schemes and more, read from the IPA's Info.plist.",
         icon: "info.circle.fill", origin: .bundled, auto: true, run: { ctx in
             ctx.say("Opening the IPA's index…")
-            let zip = try await RemoteZip.open(ctx.url)
+            let zip = try await ZipSource.open(ctx)
             let (_, plist) = try await BuiltinTools.readPlist(zip, ctx)
             func s(_ k: String) -> String { BuiltinTools.text(plist[k]) }
             var kv: [[String]] = []
@@ -59,7 +59,7 @@ enum BuiltinTools {
         id: "package", name: "Package Contents", summary: "What's in the IPA: biggest files, frameworks, extensions, languages and signing leftovers.",
         icon: "shippingbox.fill", origin: .bundled, run: { ctx in
             ctx.say("Opening the IPA's index…")
-            let zip = try await RemoteZip.open(ctx.url)
+            let zip = try await ZipSource.open(ctx)
             let files = zip.entries.filter { !$0.isFolder }
             let unpacked = files.reduce(Int64(0)) { $0 + $1.size }
             func fmt(_ n: Int64) -> String { ByteCountFormatter.string(fromByteCount: n, countStyle: .file) }
@@ -111,7 +111,7 @@ enum BuiltinTools {
         id: "raw-plist", name: "Raw Info.plist", summary: "The IPA's full Info.plist as text, to copy.",
         icon: "doc.plaintext.fill", origin: .bundled, run: { ctx in
             ctx.say("Opening the IPA's index…")
-            let zip = try await RemoteZip.open(ctx.url)
+            let zip = try await ZipSource.open(ctx)
             let (path, plist) = try await BuiltinTools.readPlist(zip, ctx)
             let xml = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
             return [PluginSection(title: path, kind: "text", text: String(decoding: xml, as: UTF8.self))]
@@ -122,6 +122,13 @@ enum BuiltinTools {
     static let linkCheck = Tool(
         id: "link-check", name: "Link Check", summary: "Is the IPA link alive, how big is it, and can the app read it without downloading?",
         icon: "link.circle.fill", origin: .bundled, run: { ctx in
+            if let local = ctx.localFile {
+                let size = (try? FileManager.default.attributesOfItem(atPath: local.path)[.size] as? Int) ?? nil
+                let bytes = size.map { ByteCountFormatter.string(fromByteCount: Int64($0), countStyle: .file) } ?? "unknown"
+                return [PluginSection(title: "Link", kind: "kv", rows: [
+                    ["Source", "Attached in chat"], ["File", local.lastPathComponent], ["Size", bytes],
+                ], note: "This file was attached directly, so there's no link to check — the app already has the whole thing.")]
+            }
             ctx.say("Asking the server…")
             var r = URLRequest(url: ctx.url, timeoutInterval: 25)
             r.setValue("bytes=0-3", forHTTPHeaderField: "Range")
@@ -147,7 +154,7 @@ enum BuiltinTools {
     // MARK: helpers
 
     /// Finds Payload/<name>.app/Info.plist, unpacks it and reads it (binary or XML).
-    static func readPlist(_ zip: RemoteZip, _ ctx: ToolContext) async throws -> (String, [String: Any]) {
+    static func readPlist(_ zip: AnyZip, _ ctx: ToolContext) async throws -> (String, [String: Any]) {
         guard let e = zip.entries.first(where: {
             let p = $0.name.split(separator: "/"); return p.count == 3 && p[0] == "Payload" && p[1].hasSuffix(".app") && p[2] == "Info.plist"
         }) else { throw ZipError("This IPA has no Payload/…app/Info.plist.") }

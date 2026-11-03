@@ -3,7 +3,7 @@ import Foundation
 /// Extra bundled tools. Same rules as BuiltinTools: read the IPA with range requests, never download the whole file.
 enum MoreTools {
 
-    private static func mainApp(_ zip: RemoteZip) -> String? {
+    private static func mainApp(_ zip: AnyZip) -> String? {
         zip.entries.first { let p = $0.name.split(separator: "/"); return p.count == 2 && p[0] == "Payload" && p[1].hasSuffix(".app/") }?.name
             ?? zip.entries.compactMap { e -> String? in
                 let p = e.name.split(separator: "/"); return p.count >= 2 && p[0] == "Payload" && p[1].hasSuffix(".app") ? "Payload/\(p[1])/" : nil
@@ -16,7 +16,7 @@ enum MoreTools {
         id: "binary", name: "Binary Inspector", summary: "Architectures, encryption state, minimum iOS, linked libraries and run paths of the main executable.",
         icon: "cpu.fill", origin: .bundled, run: { ctx in
             ctx.say("Opening the IPA's index…")
-            let zip = try await RemoteZip.open(ctx.url)
+            let zip = try await ZipSource.open(ctx)
             let (path, plist) = try await BuiltinTools.readPlist(zip, ctx)
             let exeName = BuiltinTools.text(plist["CFBundleExecutable"])
             let exePath = path.replacingOccurrences(of: "Info.plist", with: exeName)
@@ -65,7 +65,7 @@ enum MoreTools {
         id: "bundles", name: "Embedded Bundles", summary: "Every framework, extension and plug-in inside the app, with its bundle ID and version.",
         icon: "square.stack.3d.up.fill", origin: .bundled, run: { ctx in
             ctx.say("Opening the IPA's index…")
-            let zip = try await RemoteZip.open(ctx.url)
+            let zip = try await ZipSource.open(ctx)
             guard let root = mainApp(zip) else { throw ZipError("This IPA has no Payload/…app folder.") }
             let infos = zip.entries.filter {
                 guard !$0.isFolder, $0.name.hasPrefix(root), $0.name.hasSuffix("/Info.plist") else { return false }
@@ -99,7 +99,7 @@ enum MoreTools {
         id: "privacy", name: "Privacy Manifest", summary: "What the app declares in PrivacyInfo.xcprivacy: tracking, data it collects, reasons for sensitive APIs.",
         icon: "hand.raised.fill", origin: .bundled, run: { ctx in
             ctx.say("Opening the IPA's index…")
-            let zip = try await RemoteZip.open(ctx.url)
+            let zip = try await ZipSource.open(ctx)
             guard let root = mainApp(zip) else { throw ZipError("This IPA has no Payload/…app folder.") }
             guard let e = zip.entries.first(where: { $0.name == root + "PrivacyInfo.xcprivacy" }) else {
                 return [PluginSection(title: "Privacy manifest", kind: "text", text: "This app doesn't ship a privacy manifest (PrivacyInfo.xcprivacy). Older builds usually don't.")]

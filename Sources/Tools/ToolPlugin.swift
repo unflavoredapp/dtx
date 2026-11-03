@@ -17,6 +17,9 @@ struct ToolContext {
     let options: [String: String]
     /// Shows a progress line under the tool.
     let say: (String) -> Void
+    /// Set when the tool is running against a file attached directly in a chat (Ai-Decrypt) rather than a remote IPA link.
+    /// When this is set, `ZipSource.open(_:)` reads the file straight off disk instead of making range requests against `url`.
+    var localFile: URL? = nil
 
     func flag(_ key: String) -> Bool { options[key] == "true" }
 }

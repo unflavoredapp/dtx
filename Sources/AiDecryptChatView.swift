@@ -7,17 +7,34 @@
 //  Talks to the llama.cpp OpenAI-compatible endpoint, proxied through
 //  Apache at https://ai.decrypt.team/v1/chat/completions.
 //
+//  Attaching a .zip/.ipa/.dylib in chat gives the model access to the
+//  app's bundled analysis tools (App Info, Package Contents, Raw
+//  Info.plist, Link Check, Binary Inspector, Embedded Bundles, Privacy
+//  Manifest) via OpenAI-style function calling — see AiToolBridge.swift
+//  and Tools/LocalZip.swift, which let those tools run against a file
+//  on disk instead of only a remote IPA link.
+//
 
 import SwiftUI
 import UniformTypeIdentifiers
 
 // MARK: - Model
 
+struct AiToolCallResult: Equatable {
+    let id: String
+    let name: String
+}
+
 struct AiChatMessage: Identifiable, Equatable {
-    enum Role: String { case user, assistant }
+    enum Role: String { case user, assistant, system, tool }
     let id = UUID()
     let role: Role
     var content: String
+    /// Set on an assistant message that asked to call one or more tools.
+    var toolCalls: [AiToolCallResult]? = nil
+    /// Set on a `tool` message: which call this is the result of.
+    var toolCallId: String? = nil
+    var name: String? = nil
 }
 
 struct AiAttachment: Identifiable, Equatable {
@@ -26,34 +43,49 @@ struct AiAttachment: Identifiable, Equatable {
     let content: String
 }
 
+/// A .zip/.ipa/.dylib attached straight into the chat, saved to a temp file so the bundled Tools can read it
+/// (see Tools/LocalZip.swift) without needing an https link anywhere.
+struct AiBinaryAttachment: Identifiable, Equatable {
+    let id = UUID()
+    let name: String
+    let fileURL: URL
+    let size: Int
+}
+
 // MARK: - API client
 
 enum AiDecryptAPI {
     static let endpoint = URL(string: "https://ai.decrypt.team/v1/chat/completions")!
     static let model = "AiDecrypt"
 
-    private struct RequestBody: Encodable {
-        let model: String
-        let messages: [[String: String]]
-        let stream: Bool
-        let max_tokens: Int
-    }
-
-    /// Streams the assistant's reply token-by-token. `onDelta` is called on the main actor.
-    /// Without an explicit max_tokens, llama.cpp falls back to its own low default and
-    /// cuts replies off mid-sentence (finish_reason "length") — 4096 gives it real room.
-    static func streamChat(messages: [AiChatMessage], onDelta: @escaping (String) -> Void) async throws {
+    /// Streams the assistant's reply token-by-token (`onDelta`, called on the main actor) and returns any
+    /// tool calls the model asked for once the stream ends. `tools` is the OpenAI-style function list —
+    /// pass nil/empty when there's nothing for the model to call (no file attached).
+    ///
+    /// Without an explicit max_tokens, llama.cpp falls back to its own low default and cuts replies off
+    /// mid-sentence (finish_reason "length") — 4096 gives it real room.
+    @discardableResult
+    static func streamChat(messages: [AiChatMessage], tools: [[String: Any]]? = nil, onDelta: @escaping (String) -> Void) async throws -> [AiToolCallResult] {
         var request = URLRequest(url: endpoint, timeoutInterval: 180)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(
-            RequestBody(
-                model: model,
-                messages: messages.map { ["role": $0.role.rawValue, "content": $0.content] },
-                stream: true,
-                max_tokens: 4096
-            )
-        )
+
+        var body: [String: Any] = [
+            "model": model,
+            "messages": messages.map { m -> [String: Any] in
+                var d: [String: Any] = ["role": m.role.rawValue, "content": m.content]
+                if let name = m.name { d["name"] = name }
+                if let tcId = m.toolCallId { d["tool_call_id"] = tcId }
+                if let calls = m.toolCalls, !calls.isEmpty {
+                    d["tool_calls"] = calls.map { ["id": $0.id, "type": "function", "function": ["name": $0.name, "arguments": "{}"]] }
+                }
+                return d
+            },
+            "stream": true,
+            "max_tokens": 4096,
+        ]
+        if let tools, !tools.isEmpty { body["tools"] = tools; body["tool_choice"] = "auto" }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
@@ -61,6 +93,7 @@ enum AiDecryptAPI {
             throw ApiError.server("The model server answered with error \(code).", code)
         }
 
+        var callsByIndex: [Int: (id: String, name: String)] = [:]
         for try await line in bytes.lines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard trimmed.hasPrefix("data:") else { continue }
@@ -69,11 +102,23 @@ enum AiDecryptAPI {
             guard let data = payload.data(using: .utf8),
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let choices = json["choices"] as? [[String: Any]],
-                  let delta = choices.first?["delta"] as? [String: Any],
-                  let content = delta["content"] as? String, !content.isEmpty
+                  let delta = choices.first?["delta"] as? [String: Any]
             else { continue }
-            await MainActor.run { onDelta(content) }
+
+            if let content = delta["content"] as? String, !content.isEmpty {
+                await MainActor.run { onDelta(content) }
+            }
+            if let toolCalls = delta["tool_calls"] as? [[String: Any]] {
+                for tc in toolCalls {
+                    let idx = tc["index"] as? Int ?? 0
+                    var entry = callsByIndex[idx] ?? (id: "", name: "")
+                    if let id = tc["id"] as? String, !id.isEmpty { entry.id = id }
+                    if let fn = tc["function"] as? [String: Any], let name = fn["name"] as? String, !name.isEmpty { entry.name = name }
+                    callsByIndex[idx] = entry
+                }
+            }
         }
+        return callsByIndex.values.filter { !$0.name.isEmpty }.map { AiToolCallResult(id: $0.id.isEmpty ? UUID().uuidString : $0.id, name: $0.name) }
     }
 }
 
@@ -86,6 +131,7 @@ final class AiDecryptViewModel: ObservableObject {
     @Published var isStreaming = false
     @Published var errorText: String?
     @Published var pendingAttachments: [AiAttachment] = []
+    @Published var binaryAttachment: AiBinaryAttachment?
     @Published var isFetchingWebpage = false
 
     private var streamTask: Task<Void, Never>?
@@ -98,6 +144,27 @@ final class AiDecryptViewModel: ObservableObject {
 
     func removeAttachment(_ attachment: AiAttachment) {
         pendingAttachments.removeAll { $0.id == attachment.id }
+    }
+
+    /// A .zip/.ipa/.dylib attached in chat: copied to a temp file so the bundled Tools (LocalZip) can read it,
+    /// and kept around across turns so the model can call tools on it again later in the same conversation.
+    func addBinaryFile(name: String, data: Data) {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ai-decrypt-attach", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let safeName = name.isEmpty ? "attachment" : name
+        let dest = dir.appendingPathComponent(UUID().uuidString + "-" + safeName)
+        do {
+            try data.write(to: dest)
+            removeBinaryAttachment()
+            binaryAttachment = AiBinaryAttachment(name: safeName, fileURL: dest, size: data.count)
+        } catch {
+            errorText = "Couldn't attach \(safeName): \(error.localizedDescription)"
+        }
+    }
+
+    func removeBinaryAttachment() {
+        if let b = binaryAttachment { try? FileManager.default.removeItem(at: b.fileURL) }
+        binaryAttachment = nil
     }
 
     func attachWebpage(_ urlString: String) {
@@ -135,7 +202,7 @@ final class AiDecryptViewModel: ObservableObject {
 
     func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty || !pendingAttachments.isEmpty, !isStreaming else { return }
+        guard !text.isEmpty || !pendingAttachments.isEmpty || binaryAttachment != nil, !isStreaming else { return }
 
         var fullText = text
         if !pendingAttachments.isEmpty {
@@ -147,27 +214,66 @@ final class AiDecryptViewModel: ObservableObject {
         messages.append(AiChatMessage(role: .user, content: fullText))
         draft = ""
         errorText = nil
-
-        let assistantIndex = messages.count
-        messages.append(AiChatMessage(role: .assistant, content: ""))
         isStreaming = true
-
-        streamTask = Task {
-            do {
-                try await AiDecryptAPI.streamChat(messages: Array(messages.prefix(assistantIndex))) { [weak self] delta in
-                    self?.appendThrottled(delta, at: assistantIndex)
-                }
-            } catch {
-                errorText = error.localizedDescription
-            }
-            flushNow(at: assistantIndex)
-            isStreaming = false
-        }
+        streamTask = Task { await self.runTurn() }
     }
 
     func cancel() { streamTask?.cancel(); isStreaming = false }
 
-    func newChat() { cancel(); messages = []; errorText = nil }
+    func newChat() { cancel(); messages = []; errorText = nil; removeBinaryAttachment() }
+
+    /// A system message describing the attached file and available tools, prepended ahead of the real
+    /// transcript on every request — never stored in `messages`, so it doesn't show up in the UI.
+    private func apiMessages(upTo index: Int) -> [AiChatMessage] {
+        var out: [AiChatMessage] = []
+        if let bin = binaryAttachment {
+            out.append(AiChatMessage(role: .system, content:
+                "A file named \"\(bin.name)\" is attached in this chat. You have tools to analyze it directly " +
+                "(app_info, package, raw_plist, link_check, binary, bundles, privacy) — call whichever ones help " +
+                "answer the person. You don't need a link or any other input; they already operate on the attached file."
+            ))
+        }
+        out += Array(messages.prefix(index))
+        return out
+    }
+
+    /// One assistant turn, following any tool calls it makes until it gives a normal reply (or a small loop cap is hit).
+    private func runTurn() async {
+        var loops = 0
+        while loops < 4 {
+            loops += 1
+            let assistantIndex = messages.count
+            messages.append(AiChatMessage(role: .assistant, content: ""))
+            do {
+                let calls = try await AiDecryptAPI.streamChat(
+                    messages: apiMessages(upTo: assistantIndex),
+                    tools: binaryAttachment != nil ? AiToolBridge.toolSchemas() : nil
+                ) { [weak self] delta in self?.appendThrottled(delta, at: assistantIndex) }
+                flushNow(at: assistantIndex)
+
+                guard !calls.isEmpty, let bin = binaryAttachment else { break }
+                messages[assistantIndex].toolCalls = calls
+                if messages[assistantIndex].content.isEmpty {
+                    let names = calls.map { $0.name.replacingOccurrences(of: "_", with: " ") }.joined(separator: ", ")
+                    messages[assistantIndex].content = "Running \(names)…"
+                }
+                for call in calls {
+                    let resultText: String
+                    if let tool = AiToolBridge.tool(named: call.name) {
+                        resultText = await AiToolBridge.run(tool, fileURL: bin.fileURL)
+                    } else {
+                        resultText = "Unknown tool \"\(call.name)\"."
+                    }
+                    messages.append(AiChatMessage(role: .tool, content: resultText, toolCallId: call.id, name: call.name))
+                }
+                // loop again so the model sees the tool results and can reply or call another tool
+            } catch {
+                errorText = error.localizedDescription
+                break
+            }
+        }
+        isStreaming = false
+    }
 
     /// Batches token deltas and flushes at ~10fps instead of re-rendering on every token.
     private func appendThrottled(_ delta: String, at index: Int) {
@@ -203,7 +309,7 @@ struct AiDecryptChatView: View {
             VStack(spacing: 0) {
                 messageList
                 if let error = viewModel.errorText { errorBanner(error) }
-                if !viewModel.pendingAttachments.isEmpty { attachmentChips }
+                if !viewModel.pendingAttachments.isEmpty || viewModel.binaryAttachment != nil { attachmentChips }
                 composer
             }
             .background(AppBackground())
@@ -220,12 +326,17 @@ struct AiDecryptChatView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.plainText, .sourceCode, .json, .item], allowsMultipleSelection: true) { result in
+        .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.plainText, .sourceCode, .json, .zip, .item], allowsMultipleSelection: true) { result in
             guard case .success(let urls) = result else { return }
             for url in urls {
                 guard url.startAccessingSecurityScopedResource() else { continue }
                 defer { url.stopAccessingSecurityScopedResource() }
-                if let data = try? Data(contentsOf: url), let text = String(data: data, encoding: .utf8) {
+                guard let data = try? Data(contentsOf: url) else { continue }
+                let ext = url.pathExtension.lowercased()
+                if ext == "zip" || ext == "ipa" || ext == "dylib" || String(data: data, encoding: .utf8) == nil {
+                    // a zip/IPA/dylib (or anything else that isn't plain text): give it to the tool system, not the prompt text
+                    viewModel.addBinaryFile(name: url.lastPathComponent, data: data)
+                } else if let text = String(data: data, encoding: .utf8) {
                     viewModel.addFile(name: url.lastPathComponent, content: text)
                 }
             }
@@ -244,6 +355,18 @@ struct AiDecryptChatView: View {
     private var attachmentChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
+                if let bin = viewModel.binaryAttachment {
+                    HStack(spacing: 6) {
+                        Image(systemName: "shippingbox.fill").font(.caption2)
+                        Text(bin.name).font(.caption2).lineLimit(1)
+                        Button { viewModel.removeBinaryAttachment() } label: {
+                            Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
+                        }
+                    }
+                    .foregroundStyle(Color.dtAccent)
+                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .glowCapsule(strong: true)
+                }
                 ForEach(viewModel.pendingAttachments) { att in
                     HStack(spacing: 6) {
                         Image(systemName: "doc.text").font(.caption2)
@@ -269,14 +392,14 @@ struct AiDecryptChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 10) {
-                    ForEach(viewModel.messages) { message in
+                    ForEach(viewModel.messages.filter { $0.role == .user || $0.role == .assistant }) { message in
                         AiMessageBubble(message: message).id(message.id)
                     }
                 }
                 .padding(14)
             }
             .onChange(of: viewModel.messages.last?.content) { _ in
-                guard let last = viewModel.messages.last else { return }
+                guard let last = viewModel.messages.last(where: { $0.role == .user || $0.role == .assistant }) else { return }
                 withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(last.id, anchor: .bottom) }
             }
         }
@@ -320,7 +443,7 @@ struct AiDecryptChatView: View {
                     .frame(width: 30, height: 30)
                     .background(Circle().fill(Color.dtAccent))
             }
-            .disabled(viewModel.draft.trimmingCharacters(in: .whitespaces).isEmpty && viewModel.pendingAttachments.isEmpty && !viewModel.isStreaming)
+            .disabled(viewModel.draft.trimmingCharacters(in: .whitespaces).isEmpty && viewModel.pendingAttachments.isEmpty && viewModel.binaryAttachment == nil && !viewModel.isStreaming)
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
         .overlay(Divider().overlay(Color.dtLine), alignment: .top)
