@@ -36,18 +36,22 @@ enum AiDecryptAPI {
         let model: String
         let messages: [[String: String]]
         let stream: Bool
+        let max_tokens: Int
     }
 
     /// Streams the assistant's reply token-by-token. `onDelta` is called on the main actor.
+    /// Without an explicit max_tokens, llama.cpp falls back to its own low default and
+    /// cuts replies off mid-sentence (finish_reason "length") — 4096 gives it real room.
     static func streamChat(messages: [AiChatMessage], onDelta: @escaping (String) -> Void) async throws {
-        var request = URLRequest(url: endpoint, timeoutInterval: 120)
+        var request = URLRequest(url: endpoint, timeoutInterval: 180)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(
             RequestBody(
                 model: model,
                 messages: messages.map { ["role": $0.role.rawValue, "content": $0.content] },
-                stream: true
+                stream: true,
+                max_tokens: 4096
             )
         )
 
