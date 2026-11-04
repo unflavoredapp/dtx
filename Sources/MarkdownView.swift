@@ -155,7 +155,7 @@ enum CodeHighlighter {
         let key = "\(language.label)|\(size)|\(code)"
         if let c = cache[key] { return c }
         var out = AttributedString(code)
-        out.font = .system(size: size, design: .monospaced)
+        out.font = Font.system(size: size, design: .monospaced)
         out.foregroundColor = Color(uiColor: CodePalette.text)
         if language != .plain, !code.isEmpty, code.utf16.count < 20_000 {
             let storage = NSTextStorage(string: code)
@@ -178,7 +178,7 @@ enum CodeHighlighter {
         let lines = code.components(separatedBy: "\n")
         for (i, l) in lines.enumerated() {
             var a = AttributedString(l + (i < lines.count - 1 ? "\n" : ""))
-            a.font = .system(size: 12, design: .monospaced)
+            a.font = Font.system(size: 12, design: .monospaced)
             if l.hasPrefix("+") && !l.hasPrefix("+++") {
                 a.foregroundColor = Color.green; a.backgroundColor = Color.green.opacity(0.14)
             } else if l.hasPrefix("-") && !l.hasPrefix("---") {
@@ -212,14 +212,39 @@ enum CodeHighlighter {
 // MARK: - Rendering
 
 struct MarkdownView: View {
+    @Environment(\.fileRefs) private var refs
     private let blocks: [MDBlock]
 
     init(_ text: String) {
         blocks = MarkdownParser.parse(text)
     }
 
-    /// Inline markdown (bold, italic, code, links) as an AttributedString.
-    static func inline(_ s: String) -> AttributedString {
+    private static let fileRegex: NSRegularExpression? = try? NSRegularExpression(
+        pattern: #"(?<![\w/.\-])((?:[A-Za-z0-9_+\-]+/)*(?:[A-Za-z0-9_+\-]+\.(?:mm|m|hpp|h|cpp|cc|c|xmi|xm|xi|x|swift|plist|json|txt|mk)|Makefile))(?::(\d+)(?:[-–]\d+)?)?(?![\w])"#)
+
+    /// Makes `Tweak.m`, `Classes/Foo.m:42` and `Foo.m:10-20` tappable when they name a file in the project.
+    private static func linkify(_ a: inout AttributedString, refs: FileRefResolver) {
+        guard let re = fileRegex else { return }
+        let plain = String(a.characters)
+        let ns = plain as NSString
+        for m in re.matches(in: plain, range: NSRange(location: 0, length: ns.length)) {
+            let name = ns.substring(with: m.range(at: 1))
+            guard let path = refs.resolve(name) else { continue }
+            var items = [URLQueryItem(name: "p", value: path)]
+            if m.range(at: 2).location != NSNotFound { items.append(URLQueryItem(name: "l", value: ns.substring(with: m.range(at: 2)))) }
+            var c = URLComponents()
+            c.scheme = "dtx-open"; c.host = "file"; c.queryItems = items
+            guard let url = c.url, let sr = Range(m.range, in: plain),
+                  let lo = AttributedString.Index(sr.lowerBound, within: a),
+                  let hi = AttributedString.Index(sr.upperBound, within: a) else { continue }
+            a[lo..<hi].link = url
+            a[lo..<hi].foregroundColor = Color.dtAccent
+            a[lo..<hi].underlineStyle = Text.LineStyle.single
+        }
+    }
+
+    /// Inline markdown (bold, italic, code, links) as an AttributedString. With `refs`, project file names become tappable.
+    static func inline(_ s: String, refs: FileRefResolver? = nil) -> AttributedString {
         var opts = AttributedString.MarkdownParsingOptions()
         opts.interpretedSyntax = .inlineOnlyPreservingWhitespace
         opts.failurePolicy = .returnPartiallyParsedIfPossible
@@ -229,10 +254,11 @@ struct MarkdownView: View {
             if let intent = run.inlinePresentationIntent, intent.contains(.code) { codeRanges.append(run.range) }
         }
         for r in codeRanges {
-            a[r].font = .system(size: 13, weight: .medium, design: .monospaced)
+            a[r].font = Font.system(size: 13, weight: .medium, design: .monospaced)
             a[r].foregroundColor = Color(red: 1.0, green: 0.80, blue: 0.58)
             a[r].backgroundColor = Color.white.opacity(0.12)
         }
+        if let refs { linkify(&a, refs: refs) }
         return a
     }
 
@@ -257,12 +283,12 @@ struct MarkdownView: View {
     @ViewBuilder private func block(_ b: MDBlock) -> some View {
         switch b {
         case .heading(let level, let s):
-            Text(Self.inline(s))
+            Text(Self.inline(s, refs: refs))
                 .font(Self.headingFont(level))
                 .padding(.top, level <= 2 ? 4 : 2)
                 .frame(maxWidth: .infinity, alignment: .leading)
         case .paragraph(let s):
-            Text(Self.inline(s))
+            Text(Self.inline(s, refs: refs))
                 .font(.callout).lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -270,7 +296,7 @@ struct MarkdownView: View {
         case .bullet(let level, let s):
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(level == 0 ? "•" : "◦").foregroundStyle(Color.dtAccent).frame(width: 12)
-                Text(Self.inline(s)).font(.callout).lineSpacing(2).fixedSize(horizontal: false, vertical: true)
+                Text(Self.inline(s, refs: refs)).font(.callout).lineSpacing(2).fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(.leading, CGFloat(level) * 16)
@@ -278,14 +304,14 @@ struct MarkdownView: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("\(n).").font(.callout.monospacedDigit()).foregroundStyle(Color.dtAccent)
                     .frame(minWidth: 22, alignment: .trailing)
-                Text(Self.inline(s)).font(.callout).lineSpacing(2).fixedSize(horizontal: false, vertical: true)
+                Text(Self.inline(s, refs: refs)).font(.callout).lineSpacing(2).fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(.leading, CGFloat(level) * 16)
         case .quote(let s):
             HStack(alignment: .top, spacing: 10) {
                 RoundedRectangle(cornerRadius: 1.5).fill(Color.dtAccent.opacity(0.7)).frame(width: 3)
-                Text(Self.inline(s)).font(.callout).foregroundStyle(.secondary)
+                Text(Self.inline(s, refs: refs)).font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -365,4 +391,36 @@ struct MarkdownTable: View {
         .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.08)))
     }
+}
+
+// MARK: - Project file references
+
+/// Maps a name found in text (`Tweak.m`, `Classes/Foo.m`) to a real path in the open job.
+struct FileRefResolver {
+    let files: [String]
+
+    func resolve(_ raw: String) -> String? {
+        let n = raw.hasPrefix("./") ? String(raw.dropFirst(2)) : raw
+        if files.contains(n) { return n }
+        let tail = files.filter { $0.hasSuffix("/" + n) }
+        if let best = tail.min(by: { $0.count < $1.count }) { return best }
+        let base = (n as NSString).lastPathComponent
+        let same = files.filter { ($0 as NSString).lastPathComponent == base }
+        return same.count == 1 ? same[0] : nil
+    }
+}
+
+private struct FileRefKey: EnvironmentKey { static let defaultValue: FileRefResolver? = nil }
+extension EnvironmentValues {
+    var fileRefs: FileRefResolver? {
+        get { self[FileRefKey.self] }
+        set { self[FileRefKey.self] = newValue }
+    }
+}
+
+/// Reads a `dtx-open://file?p=…&l=…` link made by `MarkdownView`.
+func parseFileLink(_ url: URL) -> (path: String, line: Int?)? {
+    guard url.scheme == "dtx-open", let c = URLComponents(url: url, resolvingAgainstBaseURL: false),
+          let p = c.queryItems?.first(where: { $0.name == "p" })?.value else { return nil }
+    return (p, c.queryItems?.first(where: { $0.name == "l" })?.value.flatMap { Int($0) })
 }

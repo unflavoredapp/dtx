@@ -27,6 +27,7 @@ extension ReconstructAPI {
         var completion: Int? = nil
         var lastPrompt: Int? = nil
         var ctx: Int? = nil
+        var src: String? = nil          // api | tokenizer | estimate
         var used: Int { (prompt ?? 0) + (completion ?? 0) }
     }
 
@@ -108,6 +109,10 @@ extension ReconstructAPI {
             } catch let e as ApiError where e.status == 0 { throw e }
             catch { misses += 1; if misses > 30 { throw error } }
         }
+    }
+
+    static func aiReset(jobID: String) async throws {
+        let _: AIAck = try await Api.shared.post("\(base)/jobs/\(jobID)/ai/reset")
     }
 
     static func aiCancel(jobID: String, job: String) async {
@@ -368,29 +373,27 @@ struct AIProgressCard: View {
     }
 }
 
-/// Tokens used in this conversation and how much of the model's context window is left.
+/// Tokens used in this conversation. Staff and admin have no caps, so there is no "left" figure; the only warning is
+/// when the conversation is close to filling the model's context window (then older turns stop being read).
 struct AIUsageBar: View {
     let usage: ReconstructAPI.AIUsage
 
-    private func barColor(_ f: Double) -> Color { f > 0.9 ? Color.red : f > 0.7 ? Color.orange : Color.dtAccent }
-
     var body: some View {
         let ctx = usage.ctx ?? 0
-        let last = usage.lastPrompt ?? 0
-        let frac = ctx > 0 ? min(1.0, Double(last) / Double(ctx)) : 0
-        HStack(spacing: 10) {
-            Label("\(fmtTok(usage.used)) used", systemImage: "chart.bar.fill")
-            if ctx > 0 {
-                GeometryReader { g in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(Color.white.opacity(0.1))
-                        Capsule().fill(barColor(frac)).frame(width: max(3, g.size.width * CGFloat(frac)))
-                    }
-                }
-                .frame(height: 4)
-                Text("\(fmtTok(max(0, ctx - last))) of \(fmtTok(ctx)) left")
-            } else {
-                Spacer()
+        let frac = ctx > 0 ? Double(usage.lastPrompt ?? 0) / Double(ctx) : 0
+        HStack(spacing: 8) {
+            Label("\(usage.src == "estimate" ? "≈ " : "")\(fmtTok(usage.used)) tokens used", systemImage: "chart.bar.fill")
+            if let s = usage.src, !s.isEmpty {
+                Text(s == "estimate" ? "est." : "exact")
+                    .font(.system(size: 9, weight: .bold))
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background((s == "estimate" ? Color.orange : Color.green).opacity(0.2), in: Capsule())
+                    .foregroundStyle(s == "estimate" ? Color.orange : Color.green)
+            }
+            Spacer()
+            if frac >= 0.85 {
+                Label("context \(Int(min(frac, 1) * 100))% full", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(Color.orange)
             }
         }
         .font(.caption2.monospacedDigit())
@@ -408,6 +411,10 @@ struct ReconAIView: View {
     let symbol: String?
     let selection: String?
     let selectionLine: Int?
+    /// project files, so names in replies can be made tappable
+    let knownFiles: [String]
+    /// open a file (and optionally a line) in the editor
+    let onOpenFile: (String, Int?) -> Void
     /// called with the paths an applied / reverted patch touched, so the editor can reload them
     let onChanged: ([String]) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -448,7 +455,13 @@ struct ReconAIView: View {
             .background(Color.black)
             .navigationTitle("Ai-Decrypt")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { Task { await newConversation() } } label: { Image(systemName: "square.and.pencil") }
+                        .disabled(busy || bubbles.isEmpty)
+                }
+            }
             .sheet(item: $reviewing) { p in
                 ReconPatchReview(jobID: jobID, patch: p) { updated, touched in
                     patches[updated.id] = updated
@@ -456,6 +469,12 @@ struct ReconAIView: View {
                 }
             }
             .task { await load() }
+            .environment(\.fileRefs, FileRefResolver(files: knownFiles))
+            .environment(\.openURL, OpenURLAction { url in
+                guard let t = parseFileLink(url) else { return .systemAction }
+                onOpenFile(t.path, t.line)
+                return .handled
+            })
         }
         .preferredColorScheme(.dark)
         .tint(.dtAccent)
@@ -640,6 +659,15 @@ struct ReconAIView: View {
         } catch {
             loadError = "Couldn't reach the Ai-Decrypt service: \(error.localizedDescription)"
         }
+    }
+
+    /// Starts a fresh conversation for this job: clears the chat and the token count. Patches stay (and the model still sees them).
+    private func newConversation() async {
+        do {
+            try await ReconstructAPI.aiReset(jobID: jobID)
+            bubbles = []
+            usage = ReconstructAPI.AIUsage(prompt: 0, completion: 0, lastPrompt: 0, ctx: usage.ctx, src: nil)
+        } catch { loadError = "Couldn't start a new conversation: \(error.localizedDescription)" }
     }
 
     private func openReview(_ p: ReconstructAPI.AIPatch) async {

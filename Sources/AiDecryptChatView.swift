@@ -44,6 +44,24 @@ struct AiChatMessage: Identifiable, Equatable {
     var name: String? = nil
     /// An interactive card shown under this message (app picker, dylib picker). See AiRepoCards.swift.
     var card: AiCard? = nil
+    /// "12s · 412 tokens · 17.8 tok/s", set once the reply has finished.
+    var meta: String? = nil
+}
+
+/// Progress signals from the model stream, used for the live indicator and the per-reply token footer.
+enum AiStreamEvent { case reasoning, content, toolCall, usage(prompt: Int, completion: Int) }
+
+final class AiStreamSink {
+    let handle: (AiStreamEvent) -> Void
+    init(_ handle: @escaping (AiStreamEvent) -> Void) { self.handle = handle }
+}
+
+struct AiLiveStats: Equatable {
+    enum Phase: Equatable { case reading, reasoning, writing, toolCall, running(String), remembering }
+    var phase: Phase = .reading
+    var startedAt = Date()
+    var tokens = 0
+    var tps = 0.0
 }
 
 /// Interactive cards the repo/decrypt flow shows in the chat.
@@ -131,6 +149,7 @@ enum AiDecryptAPI {
         tools: [[String: Any]]? = nil,
         endpoint: URL = AiDecryptAPI.endpoint,
         model: String = AiDecryptAPI.model,
+        sink: AiStreamSink? = nil,
         onDelta: @escaping (String) -> Void
     ) async throws -> [AiToolCallResult] {
         var request = URLRequest(url: endpoint, timeoutInterval: 180)
@@ -161,6 +180,7 @@ enum AiDecryptAPI {
             },
             "stream": true,
             "max_tokens": 4096,
+            "stream_options": ["include_usage": true],
         ]
         if let tools, !tools.isEmpty { body["tools"] = tools; body["tool_choice"] = "auto" }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -178,15 +198,23 @@ enum AiDecryptAPI {
             let payload = trimmed.dropFirst(5).trimmingCharacters(in: .whitespaces)
             if payload == "[DONE]" { continue }
             guard let data = payload.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let choices = json["choices"] as? [[String: Any]],
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { continue }
+            if let u = json["usage"] as? [String: Any], let pt = u["prompt_tokens"] as? Int, let ct = u["completion_tokens"] as? Int {
+                await MainActor.run { sink?.handle(.usage(prompt: pt, completion: ct)) }
+            }
+            guard let choices = json["choices"] as? [[String: Any]],
                   let delta = choices.first?["delta"] as? [String: Any]
             else { continue }
 
+            if let r = delta["reasoning_content"] as? String, !r.isEmpty {
+                await MainActor.run { sink?.handle(.reasoning) }
+            }
             if let content = delta["content"] as? String, !content.isEmpty {
-                await MainActor.run { onDelta(content) }
+                await MainActor.run { sink?.handle(.content); onDelta(content) }
             }
             if let toolCalls = delta["tool_calls"] as? [[String: Any]] {
+                await MainActor.run { sink?.handle(.toolCall) }
                 for tc in toolCalls {
                     let idx = tc["index"] as? Int ?? 0
                     var entry = callsByIndex[idx] ?? (id: "", name: "", arguments: "")
@@ -204,6 +232,39 @@ enum AiDecryptAPI {
     }
 }
 
+// MARK: - Saved conversations
+
+struct SavedMessage: Codable { var role: String; var content: String; var meta: String? }
+
+struct SavedConversation: Codable, Identifiable {
+    var id = UUID()
+    var title = "New chat"
+    var updated = Date()
+    var messages: [SavedMessage] = []
+    /// rolling summary of the turns that no longer fit in the prompt
+    var summary = ""
+    /// how many user turns (from the start) are folded into `summary`
+    var foldedUsers = 0
+    var prompt = 0
+    var completion = 0
+    var src: String? = nil
+}
+
+enum ChatArchive {
+    private static var url: URL {
+        let d = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d.appendingPathComponent("ai-decrypt-chats.json")
+    }
+    static func load() -> [SavedConversation] {
+        guard let data = try? Data(contentsOf: url), let list = try? JSONDecoder().decode([SavedConversation].self, from: data) else { return [] }
+        return list
+    }
+    static func save(_ list: [SavedConversation]) {
+        if let data = try? JSONEncoder().encode(list) { try? data.write(to: url, options: .atomic) }
+    }
+}
+
 // MARK: - View model
 
 @MainActor
@@ -216,6 +277,125 @@ final class AiDecryptViewModel: ObservableObject {
     @Published var binaryAttachment: AiBinaryAttachment?
     @Published var pendingImage: AiImageAttachment?
     @Published var isFetchingWebpage = false
+    @Published var live = AiLiveStats()
+    /// Tokens used in this chat (staff and admin have no cap, so this is only a running total).
+    @Published var usage = ReconstructAPI.AIUsage()
+    @Published var conversations: [SavedConversation] = []
+    private(set) var currentID = UUID()
+    private var summary = ""
+    private var foldedUsers = 0
+
+    init() {
+        conversations = ChatArchive.load().sorted { $0.updated > $1.updated }
+        if let last = conversations.first { restore(last) }
+    }
+
+    private func restore(_ c: SavedConversation) {
+        currentID = c.id
+        messages = c.messages.compactMap { m in
+            guard let r = AiChatMessage.Role(rawValue: m.role) else { return nil }
+            var x = AiChatMessage(role: r, content: m.content)
+            x.meta = m.meta
+            return x
+        }
+        summary = c.summary
+        foldedUsers = c.foldedUsers
+        usage = ReconstructAPI.AIUsage(prompt: c.prompt, completion: c.completion, lastPrompt: nil, ctx: nil, src: c.src)
+        errorText = nil
+    }
+
+    private func blankChat() {
+        messages = []; summary = ""; foldedUsers = 0
+        usage = ReconstructAPI.AIUsage(); currentID = UUID(); errorText = nil
+        removeBinaryAttachment(); removeImage()
+    }
+
+    /// Writes this conversation (text turns only) to disk so it is still there next time.
+    private func persist() {
+        let saved = messages.compactMap { m -> SavedMessage? in
+            guard m.role == .user || m.role == .assistant, m.toolCalls == nil, m.card == nil,
+                  !m.content.isEmpty, m.content != "Generating…" else { return nil }
+            return SavedMessage(role: m.role.rawValue, content: m.content, meta: m.meta)
+        }
+        guard !saved.isEmpty else { return }
+        var c = conversations.first(where: { $0.id == currentID }) ?? SavedConversation(id: currentID)
+        c.messages = saved; c.updated = Date(); c.summary = summary; c.foldedUsers = foldedUsers
+        c.prompt = usage.prompt ?? 0; c.completion = usage.completion ?? 0; c.src = usage.src
+        if let u = saved.first(where: { $0.role == "user" })?.content {
+            let t = u.trimmingCharacters(in: .whitespacesAndNewlines)
+            let line = t.hasPrefix("--- file:")
+                ? (t.components(separatedBy: "\n").last(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) ?? "Attachment")
+                : (t.components(separatedBy: "\n").first ?? t)
+            c.title = String(line.prefix(48))
+        }
+        conversations.removeAll { $0.id == currentID }
+        conversations.insert(c, at: 0)
+        conversations = Array(conversations.sorted { $0.updated > $1.updated }.prefix(60))
+        ChatArchive.save(conversations)
+    }
+
+    func open(_ id: UUID) {
+        guard id != currentID, let c = conversations.first(where: { $0.id == id }) else { return }
+        cancel(); persist(); restore(c)
+    }
+
+    func delete(_ id: UUID) {
+        conversations.removeAll { $0.id == id }
+        ChatArchive.save(conversations)
+        if id == currentID { cancel(); blankChat() }
+    }
+
+    // MARK: memory — long chats are folded into a rolling summary instead of being forgotten
+
+    /// Index of the first message still sent to the model verbatim.
+    private func foldStartIndex() -> Int {
+        guard foldedUsers > 0 else { return 0 }
+        var seen = 0
+        for (i, m) in messages.enumerated() where m.role == .user {
+            if seen == foldedUsers { return i }
+            seen += 1
+        }
+        return messages.count
+    }
+
+    /// When the transcript outgrows the context window, the oldest turns are summarized (with the earlier summary) and
+    /// dropped from the prompt. The screen and the saved chat keep every message.
+    private func compactIfNeeded() async {
+        let budget = 70_000
+        let start = foldStartIndex()
+        guard start < messages.count else { return }
+        let tail = Array(messages[start...])
+        guard tail.reduce(0, { $0 + $1.content.count }) > budget else { return }
+
+        var suffix = 0
+        var cut: Int? = nil
+        for i in stride(from: tail.count - 1, through: 0, by: -1) {
+            suffix += tail[i].content.count
+            if suffix > budget / 2 { break }
+            if tail[i].role == .user { cut = i }
+        }
+        guard let cutIdx = cut, cutIdx > 0 else { return }
+        let chunk = Array(tail[..<cutIdx])
+        let userCount = chunk.filter { $0.role == .user }.count
+
+        live.phase = .remembering
+        var transcript = ""
+        for m in chunk where m.role == .user || m.role == .assistant {
+            transcript += (m.role == .user ? "User: " : "Assistant: ") + String(m.content.prefix(3000)) + "\n\n"
+            if transcript.count > 36_000 { break }
+        }
+        var out = ""
+        do {
+            _ = try await AiDecryptAPI.streamChat(messages: [
+                AiChatMessage(role: .system, content: "You maintain the long-term memory of a chat. Merge the earlier summary with the new conversation turns into ONE updated summary (max 350 words). Keep the person's goals, facts they stated, decisions made, names, file names, identifiers, code that mattered, and anything still unresolved. No preamble."),
+                AiChatMessage(role: .user, content: "Earlier summary:\n\(summary.isEmpty ? "(none yet)" : summary)\n\nNew turns:\n\(transcript)")
+            ], tools: nil) { out += $0 }
+            let t = out.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !t.isEmpty { summary = t }
+        } catch { /* the old turns still leave the prompt so the request fits */ }
+        foldedUsers += userCount
+        persist()
+    }
 
     /// The app's shared repo state, set by the view, so the model's search_apps tool and the card taps can read
     /// the loaded app library and drive the backend flow.
@@ -225,6 +405,57 @@ final class AiDecryptViewModel: ObservableObject {
     private var flowTask: Task<Void, Never>?
     private var pendingAppend = ""
     private var flushTask: Task<Void, Never>?
+
+    // per-run token accounting (a run = one send, which may loop through tool calls)
+    private var runStart = Date()
+    private var runFirstToken: Date?
+    private var runMsgStart = 0
+    private var runCounted = 0, runAPIComp = 0, runAPIPrompt = 0, runAPICalls = 0, runCalls = 0
+    private var lastLive = Date.distantPast
+
+    private func beginRun() {
+        runStart = Date(); runFirstToken = nil; runMsgStart = messages.count
+        runCounted = 0; runAPIComp = 0; runAPIPrompt = 0; runAPICalls = 0; runCalls = 0
+        live = AiLiveStats(startedAt: runStart)
+    }
+    private func beginCall() { runCalls += 1; live.phase = .reading }
+
+    private lazy var sink = AiStreamSink { [weak self] e in self?.handle(e) }
+
+    private func handle(_ e: AiStreamEvent) {
+        switch e {
+        case .reasoning: runCounted += 1; if runFirstToken == nil { runFirstToken = Date() }; live.phase = .reasoning
+        case .content: runCounted += 1; if runFirstToken == nil { runFirstToken = Date() }; live.phase = .writing
+        case .toolCall: live.phase = .toolCall
+        case .usage(let p, let c): runAPIPrompt += p; runAPIComp += c; runAPICalls += 1
+        }
+        let now = Date()
+        if now.timeIntervalSince(lastLive) > 0.15 {
+            lastLive = now
+            live.tokens = runCounted
+            if let f = runFirstToken { live.tps = Double(runCounted) / max(0.5, now.timeIntervalSince(f)) }
+        }
+    }
+
+    private func finishRun() {
+        let secs = Int(Date().timeIntervalSince(runStart))
+        let exact = runCalls > 0 && runAPICalls == runCalls
+        let tok = exact ? runAPIComp : runCounted
+        var parts = [secs < 60 ? "\(secs)s" : "\(secs / 60)m \(secs % 60)s"]
+        if tok > 0 { parts.append("\(exact ? "" : "≈ ")\(tok) tokens") }
+        if tok > 0, let f = runFirstToken {
+            let d = Date().timeIntervalSince(f)
+            if d > 0.5 { parts.append(String(format: "%.1f tok/s", Double(tok) / d)) }
+        }
+        if exact, runAPIPrompt > 0 { parts.append("\(runAPIPrompt) in") }
+        let promptEst = Int((Double(apiMessages(upTo: messages.count).reduce(0) { $0 + $1.content.count }) / 3.3).rounded(.up))
+        usage.prompt = (usage.prompt ?? 0) + (exact ? runAPIPrompt : promptEst)
+        usage.completion = (usage.completion ?? 0) + tok
+        usage.src = (usage.src == "estimate" || !exact) ? "estimate" : "api"
+        if let i = messages.lastIndex(where: { $0.role == .assistant && !$0.content.isEmpty }), i >= runMsgStart {
+            messages[i].meta = parts.joined(separator: " · ")
+        }
+    }
 
     func addFile(name: String, content: String) {
         pendingAttachments.append(AiAttachment(name: name, content: content))
@@ -325,17 +556,22 @@ final class AiDecryptViewModel: ObservableObject {
         draft = ""
         errorText = nil
         isStreaming = true
+        beginRun()
+        persist()
         streamTask = Task { await self.runTurn() }
     }
 
     func cancel() { streamTask?.cancel(); flowTask?.cancel(); isStreaming = false }
 
-    func newChat() { cancel(); messages = []; errorText = nil; removeBinaryAttachment(); removeImage() }
+    func newChat() { cancel(); persist(); blankChat() }
 
     /// A system message describing the attached file and available tools, prepended ahead of the real
     /// transcript on every request — never stored in `messages`, so it doesn't show up in the UI.
     private func apiMessages(upTo index: Int) -> [AiChatMessage] {
         var out: [AiChatMessage] = []
+        if !summary.isEmpty {
+            out.append(AiChatMessage(role: .system, content: "Memory of the earlier part of this conversation (summarized):\n\(summary)"))
+        }
         if let bin = binaryAttachment {
             out.append(AiChatMessage(role: .system, content:
                 "A file named \"\(bin.name)\" is attached in this chat. You have tools to analyze it directly " +
@@ -353,18 +589,21 @@ final class AiDecryptViewModel: ObservableObject {
                 "For any other request, just answer normally about the image."
             ))
         }
-        out += Array(messages.prefix(index))
+        out += Array(messages[min(foldStartIndex(), index)..<index])
         return out
     }
 
     /// A photo in the history routes the turn to the vision model (which sees images but can't tool-call);
     /// otherwise the text model handles it (which tool-calls reliably but sees no images).
     private func runTurn() async {
+        await compactIfNeeded()
         if messages.contains(where: { $0.imageData != nil }) {
             await runVisionTurn()
         } else {
             await runTextTurn()
         }
+        finishRun()
+        persist()
         isStreaming = false
     }
 
@@ -374,12 +613,14 @@ final class AiDecryptViewModel: ObservableObject {
     private func runVisionTurn() async {
         let assistantIndex = messages.count
         messages.append(AiChatMessage(role: .assistant, content: ""))
+        beginCall()
         do {
             _ = try await AiDecryptAPI.streamChat(
                 messages: apiMessages(upTo: assistantIndex),
                 tools: nil,
                 endpoint: AiDecryptAPI.visionEndpoint,
-                model: AiDecryptAPI.visionModel
+                model: AiDecryptAPI.visionModel,
+                sink: sink
             ) { [weak self] delta in self?.appendThrottled(delta, at: assistantIndex) }
             flushNow(at: assistantIndex)
 
@@ -411,9 +652,11 @@ final class AiDecryptViewModel: ObservableObject {
                 var tools: [[String: Any]] = [AiImageGen.schema, AiRepoTools.searchAppsSchema]
                 if binaryAttachment != nil { tools += AiToolBridge.toolSchemas() }
 
+                beginCall()
                 let calls = try await AiDecryptAPI.streamChat(
                     messages: apiMessages(upTo: assistantIndex),
-                    tools: tools
+                    tools: tools,
+                    sink: sink
                 ) { [weak self] delta in self?.appendThrottled(delta, at: assistantIndex) }
                 flushNow(at: assistantIndex)
 
@@ -425,6 +668,7 @@ final class AiDecryptViewModel: ObservableObject {
                 }
 
                 for call in calls {
+                    live.phase = .running(call.name.replacingOccurrences(of: "_", with: " "))
                     if call.name == "search_apps" {
                         // The model only starts the flow; the tappable cards + taps drive everything after, so we
                         // show the card and end the turn (no model follow-up). Drop the "Running…" placeholder the
@@ -655,6 +899,7 @@ struct AiDecryptChatView: View {
     @State private var webpageURL = ""
     @State private var photoItem: PhotosPickerItem?
     @State private var showPhotoPicker = false
+    @State private var showHistory = false
 
     var body: some View {
         NavigationStack {
@@ -668,6 +913,8 @@ struct AiDecryptChatView: View {
                     .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
                     .onChange(of: photoItem) { _ in handlePickedPhoto() }
                 if let error = viewModel.errorText { errorBanner(error) }
+                AIUsageBar(usage: shownUsage)
+                    .sheet(isPresented: $showHistory) { AiHistorySheet(vm: viewModel) }
                 if !viewModel.pendingAttachments.isEmpty || viewModel.binaryAttachment != nil || viewModel.pendingImage != nil { attachmentChips }
                 composer
             }
@@ -679,7 +926,8 @@ struct AiDecryptChatView: View {
                         .font(.headline).foregroundStyle(.white)
                 }
                 ToolbarItem(placement: .topBarLeading) { Button("Close") { dismiss() } }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button { showHistory = true } label: { Image(systemName: "clock.arrow.circlepath") }
                     Button { viewModel.newChat() } label: { Image(systemName: "square.and.pencil") }
                 }
             }
@@ -695,6 +943,13 @@ struct AiDecryptChatView: View {
         } message: {
             Text("Its text content will be added as context for your next message.")
         }
+    }
+
+    /// session total, plus the tokens of the reply that is still being written
+    private var shownUsage: ReconstructAPI.AIUsage {
+        var u = viewModel.usage
+        if viewModel.isStreaming { u.completion = (u.completion ?? 0) + viewModel.live.tokens }
+        return u
     }
 
     private func pickFiles() {
@@ -793,15 +1048,18 @@ struct AiDecryptChatView: View {
                     ForEach(viewModel.messages.filter { $0.role == .user || $0.role == .assistant }) { message in
                         VStack(alignment: .leading, spacing: 8) {
                             if !message.content.isEmpty || message.imageData != nil {
-                                AiMessageBubble(message: message)
+                                AiMessageBubble(message: message).equatable()
                             }
                             if let card = message.card { cardView(card) }
                         }
                         .id(message.id)
                     }
+                    if viewModel.isStreaming { AiLiveStrip(live: viewModel.live).id("live") }
+                    Color.clear.frame(height: 1).id("bottom")
                 }
                 .padding(14)
             }
+            .onChange(of: viewModel.isStreaming) { s in if s { withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } } }
             .onChange(of: viewModel.messages.last?.content) { _ in
                 guard let last = viewModel.messages.last(where: { $0.role == .user || $0.role == .assistant }) else { return }
                 withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(last.id, anchor: .bottom) }
@@ -883,10 +1141,95 @@ struct AiDecryptChatView: View {
     }
 }
 
+// MARK: - Saved chats
+
+private struct AiHistorySheet: View {
+    @ObservedObject var vm: AiDecryptViewModel
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if vm.conversations.isEmpty {
+                    Text("No saved chats yet.").foregroundStyle(.secondary)
+                }
+                ForEach(vm.conversations) { c in
+                    Button { vm.open(c.id); dismiss() } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 6) {
+                                Text(c.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                                if c.id == vm.currentID {
+                                    Text("current").font(.system(size: 9, weight: .bold)).foregroundStyle(Color.dtAccent)
+                                }
+                            }
+                            Text("\(c.messages.count) messages · \(c.updated.formatted(.relative(presentation: .named)))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+                .onDelete { idx in
+                    let ids = idx.map { vm.conversations[$0].id }
+                    ids.forEach { vm.delete($0) }
+                }
+            }
+            .navigationTitle("Chats")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } } }
+        }
+        .preferredColorScheme(.dark)
+    }
+}
+
+// MARK: - Live progress
+
+/// What the model is doing right now, with real counters instead of a fake percentage.
+private struct AiLiveStrip: View {
+    let live: AiLiveStats
+
+    private var label: String {
+        switch live.phase {
+        case .reading: return "Reading your message"
+        case .reasoning: return "Reasoning it through"
+        case .writing: return "Writing the answer"
+        case .toolCall: return "Preparing a tool call"
+        case .running(let n): return "Running \(n)"
+        case .remembering: return "Saving earlier chat to memory"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                AIActivityBars()
+                Text(label).font(.subheadline.weight(.semibold))
+                Spacer()
+                TimelineView(.periodic(from: live.startedAt, by: 1)) { ctx in
+                    let s = max(0, Int(ctx.date.timeIntervalSince(live.startedAt)))
+                    Text(s < 60 ? "\(s)s" : "\(s / 60)m \(s % 60)s")
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }
+            }
+            AIShimmerLine()
+            if live.tokens > 0 {
+                HStack(spacing: 12) {
+                    Label("\(live.tokens) tokens", systemImage: "number")
+                    if live.tps > 0 { Label(String(format: "%.1f tok/s", live.tps), systemImage: "bolt.fill") }
+                }
+                .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.dtAccent.opacity(0.25)))
+    }
+}
+
 // MARK: - Message bubble
 
-private struct AiMessageBubble: View {
+private struct AiMessageBubble: View, Equatable {
     let message: AiChatMessage
+    static func == (a: AiMessageBubble, b: AiMessageBubble) -> Bool { a.message == b.message }
 
     var body: some View {
         HStack {
@@ -897,12 +1240,19 @@ private struct AiMessageBubble: View {
                         .frame(maxWidth: 220, maxHeight: 220)
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
-                ForEach(Array(contentBlocks.enumerated()), id: \.offset) { _, block in
-                    switch block {
-                    case .text(let text):
-                        Text(text).font(.subheadline).foregroundStyle(.white).textSelection(.enabled)
-                    case .code(let lang, let code):
-                        AiCodeBlockView(language: lang, code: code).padding(.vertical, 4)
+                if message.role == .assistant {
+                    if !message.content.isEmpty { MarkdownView(message.content) }
+                    if let m = message.meta {
+                        Text(m).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                } else {
+                    ForEach(Array(contentBlocks.enumerated()), id: \.offset) { _, block in
+                        switch block {
+                        case .text(let text):
+                            Text(text).font(.subheadline).foregroundStyle(.white).textSelection(.enabled)
+                        case .code(let lang, let code):
+                            AiCodeBlockView(language: lang, code: code).padding(.vertical, 4)
+                        }
                     }
                 }
             }

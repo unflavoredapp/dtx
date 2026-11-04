@@ -14,7 +14,6 @@ struct HomeView: View {
             ScrollView {
                 VStack(spacing: 18) {
                     LiveBannerView()
-                    tools
                     if store.onlyDefault { repoNotice }
                     aiDecryptCard
                     statsRow
@@ -32,47 +31,6 @@ struct HomeView: View {
             .sheet(isPresented: $showChangelog) { ChangelogView() }
             .sheet(isPresented: $showActivity) { ActivityView(items: recent) }
         }
-    }
-
-    // MARK: featured tools
-
-    private var tools: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                RoundedRectangle(cornerRadius: 2).fill(Color.dtAccent).frame(width: 4, height: 22)
-                Text("Featured Tools").font(.title3.weight(.bold))
-                Spacer()
-                Button { store.tab = .search } label: { HStack(spacing: 3) { Text("Open apps"); Image(systemName: "chevron.right").font(.caption.weight(.bold)) } }
-                    .font(.subheadline.weight(.semibold)).foregroundStyle(Color.dtAccent)
-            }
-            HStack(spacing: 8) {
-                toolCard("Find Apps", "Search every repo you added", "magnifyingglass", [.cyan, .blue], nil) { store.tab = .search }
-                toolCard("Decrypt & Inject", nil, "lock.open.fill", [Color(red: 0.99, green: 0.55, blue: 0.2), .red], "EXCLUSIVE") { store.showQuickBuild = true }
-                toolCard("Repo Studio", "Read repos, pull IPAs and libraries", "square.stack.3d.up.fill", [.purple, .indigo], nil) { store.tab = .repos }
-                toolCard("Tools", "CFG viewer, injector and more", "briefcase.fill", [Color(red: 0.2, green: 0.8, blue: 0.45), Color(red: 0.05, green: 0.55, blue: 0.3)], nil) { store.showTools = true }
-            }
-        }
-    }
-
-    private func toolCard(_ title: String, _ sub: String?, _ icon: String, _ colors: [Color], _ badge: String?, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 7) {
-                Image(systemName: icon).font(.system(size: 24, weight: .semibold)).foregroundStyle(.white)
-                    .frame(width: 54, height: 54)
-                    .background(LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing))
-                    .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                    .shadow(color: colors[0].opacity(0.5), radius: 8)
-                Text(title).font(.subheadline.weight(.bold)).foregroundStyle(.white).multilineTextAlignment(.center).lineLimit(2).minimumScaleFactor(0.8)
-                if let sub { Text(sub).font(.system(size: 10)).foregroundStyle(.secondary).multilineTextAlignment(.center).lineLimit(3) }
-                if let badge { Text(badge).font(.system(size: 9, weight: .heavy)).foregroundStyle(Color.dtAccent).padding(.horizontal, 7).padding(.vertical, 3).overlay(Capsule().stroke(Color.dtAccent)) }
-                Spacer(minLength: 0)
-            }
-            .frame(maxWidth: .infinity, minHeight: 142, alignment: .top)
-            .padding(.vertical, 10).padding(.horizontal, 4)
-            .background(RoundedRectangle(cornerRadius: 20, style: .continuous).fill(Color.white.opacity(0.065)))
-            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Color.white.opacity(0.1)))
-        }
-        .buttonStyle(.plain)
     }
 
     // MARK: Ai-Decrypt card

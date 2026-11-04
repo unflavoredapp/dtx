@@ -67,7 +67,10 @@ struct ReconEditorView: View {
             .navigationTitle(dylibName)
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: String.self) { path in
-                ReconFileEditor(jobID: jobID, path: path, building: $building, buildLine: $buildLine, buildError: $buildError, jump: $jump, onBuild: { rebuild() })
+                ReconFileEditor(jobID: jobID, path: path, building: $building, buildLine: $buildLine, buildError: $buildError, jump: $jump,
+                                 knownFiles: visibleFiles.map { $0.path },
+                                 openFile: { p, line in jump = line.map { "#\($0)" }; navPath = [p] },
+                                 onBuild: { rebuild() })
             }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } }
@@ -158,6 +161,8 @@ struct ReconFileEditor: View {
     @Binding var buildLine: String
     @Binding var buildError: String?
     @Binding var jump: String?
+    let knownFiles: [String]
+    let openFile: (String, Int?) -> Void
     let onBuild: () -> Void
 
     @StateObject private var ctl = CodeEditorController()
@@ -231,7 +236,9 @@ struct ReconFileEditor: View {
                 ReconEvidenceView(jobID: jobID, fileFilter: path, onOpen: { rec in ctl.jump(toSymbol: rec.label) },
                                   onAsk: { rec in aiSymbol = rec.label; aiSelection = nil; sheet = .ai })
             case .ai:
-                ReconAIView(jobID: jobID, file: path, symbol: aiSymbol, selection: aiSelection?.text, selectionLine: aiSelection?.line) { touched in
+                ReconAIView(jobID: jobID, file: path, symbol: aiSymbol, selection: aiSelection?.text, selectionLine: aiSelection?.line,
+                            knownFiles: knownFiles,
+                            onOpenFile: { target, line in openFromAI(target, line) }) { touched in
                     if touched.contains(path) { Task { await reloadFromServer() } }
                 }
             }
@@ -247,7 +254,7 @@ struct ReconFileEditor: View {
             await loadDiag()
             if let j = jump {
                 try? await Task.sleep(nanoseconds: 400_000_000)
-                ctl.jump(toSymbol: j)
+                if j.hasPrefix("#"), let n = Int(j.dropFirst()) { ctl.goTo(line: n) } else { ctl.jump(toSymbol: j) }
                 jump = nil
             }
         }
@@ -423,6 +430,16 @@ struct ReconFileEditor: View {
     }
 
     /// The assistant works on the saved file on the server, so save first and hand it whatever is selected.
+    /// A file name tapped in an Ai-Decrypt reply: same file → jump to the line; another file → close the sheet and open it.
+    private func openFromAI(_ target: String, _ line: Int?) {
+        sheet = nil
+        if target == path {
+            if let l = line { DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { ctl.goTo(line: l) } }
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { openFile(target, line) }
+        }
+    }
+
     private func openAI() async {
         if dirty { guard await performSave() else { return } }
         aiSymbol = nil

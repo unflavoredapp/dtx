@@ -52,7 +52,7 @@ module.exports = function mountAiEdit(ctx) {
   const loadPatches = (part) => readJson(patchesFile(part), []);
   const savePatches = (part, v) => { fs.mkdirSync(aiDir(part), { recursive: true }); const t = patchesFile(part) + '.tmp'; fs.writeFileSync(t, JSON.stringify(v.slice(-40))); fs.renameSync(t, patchesFile(part)); };
   const loadChat = (part) => readJson(chatFile(part), []);
-  const saveChat = (part, v) => { fs.mkdirSync(aiDir(part), { recursive: true }); fs.writeFileSync(chatFile(part), JSON.stringify(v.slice(-40))); };
+  const saveChat = (part, v) => { fs.mkdirSync(aiDir(part), { recursive: true }); fs.writeFileSync(chatFile(part), JSON.stringify(v.slice(-300))); };
 
   // an editable path: an existing generated source file, never a build-control file or a derived/report folder
   const BLOCKED = /^(?:\.|obj\/|Report\/|Pseudo\/|build\.sh$|build-report\.txt$|build-errors\.txt$|manifest\.json$|Makefile$)/;
@@ -173,6 +173,37 @@ module.exports = function mountAiEdit(ctx) {
     return ctxTokens;
   }
   const estTokens = (s) => Math.ceil(String(s || '').length / 3.3);
+  const RANK = { estimate: 0, tokenizer: 1, api: 2 };
+  const minSrc = (a, b) => (!a ? b : !b ? a : RANK[a] <= RANK[b] ? a : b);
+  // The model server's own tokenizer (llama.cpp: POST /tokenize, /apply-template). Tried at the server root and next to the
+  // chat endpoint; a miss is remembered for ten minutes so a server without them costs nothing.
+  const epCache = new Map();
+  async function llmCall(url, endpoint, body) {
+    let u; try { u = new URL(url); } catch { return null; }
+    const key = u.origin + endpoint, c = epCache.get(key);
+    if (c && c.bad && Date.now() - c.at < 600000) return null;
+    const cands = [...new Set([c && c.path, '/' + endpoint, u.pathname.replace(/\/chat\/completions\/?$/, '') + '/' + endpoint].filter(Boolean))];
+    for (const pth of cands) {
+      try {
+        const t = new URL(url); t.pathname = pth; t.search = '';
+        const r = await postJson(t.toString(), body, 8000);
+        if (r.status < 200 || r.status >= 300) continue;
+        const j = JSON.parse(r.text); epCache.set(key, { path: pth }); return j;
+      } catch {}
+    }
+    epCache.set(key, { bad: true, at: Date.now() }); return null;
+  }
+  async function tokenize(url, text) {
+    const j = await llmCall(url, 'tokenize', { content: String(text == null ? '' : text), add_special: false, parse_special: true });
+    return j && Array.isArray(j.tokens) ? j.tokens.length : null;
+  }
+  // exact size of the request the model will receive: chat template applied, then tokenized
+  async function countPrompt(url, messages) {
+    const t = await llmCall(url, 'apply-template', { messages });
+    if (t && typeof t.prompt === 'string') { const n = await tokenize(url, t.prompt); if (n != null) return { n, src: 'tokenizer' }; }
+    const n = await tokenize(url, messages.map((m) => m.content).join('\n'));
+    return n != null ? { n: n + messages.length * 4 + 3, src: 'tokenizer' } : null;
+  }
   const stepTo = (job, key, label, detail) => {
     if (!job) return; const now = Date.now(), cur = job.steps[job.steps.length - 1];
     if (cur && !cur.end) { if (cur.key === key) { cur.label = label; if (detail !== undefined) cur.detail = detail; return; } cur.end = now; }
@@ -205,7 +236,7 @@ module.exports = function mountAiEdit(ctx) {
     return { key: 'think', label: 'Working out the answer', L };
   }
   function onDelta(job, kind, text) {
-    if (kind === 'content') job.raw += text; else job.reasoning += text.length;
+    if (kind === 'content') job.raw += text; else job.reasoning += 1;
     const now = Date.now(); job.tokens++; if (!job.firstTok) job.firstTok = now; job.lastTok = now;
     if (now - (job.phaseAt || 0) > 200) { job.phaseAt = now; const p = phaseOf(job); stepTo(job, 'm-' + p.key, p.label); }
   }
@@ -215,19 +246,29 @@ module.exports = function mountAiEdit(ctx) {
     if (job) { if (job.cancelled) throw Object.assign(new Error('Stopped.'), { stopped: true }); stepTo(job, 'queue', 'Waiting for the model', running >= maxConc ? 'another request is using it' : ''); }
     await slot();
     try {
-      if (job) { if (job.cancelled) throw Object.assign(new Error('Stopped.'), { stopped: true }); job.raw = ''; job.usageDone = false; job.reasoning = 0; job.tokens = 0; job.firstTok = 0; job.lastTok = 0; job.attempt = attempt; job.model = model; job.deep = !!deep;
+      if (job) { if (job.cancelled) throw Object.assign(new Error('Stopped.'), { stopped: true }); job.pre = null; job.raw = ''; job.usageDone = false; job.reasoning = 0; job.tokens = 0; job.firstTok = 0; job.lastTok = 0; job.attempt = attempt; job.model = model; job.deep = !!deep;
         stepTo(job, 'm-read', 'Model is reading the context', (deep ? 'deep model · ' : '') + 'attempt ' + attempt); }
+      if (job) { job.pre = await countPrompt(url, messages); if (job.cancelled) throw Object.assign(new Error('Stopped.'), { stopped: true }); }
       const hk = job ? { onDelta: (k, t) => onDelta(job, k, t), onReq: (rq) => { job.req = rq; }, onUsage: (u) => { job.apiUsage = u; } } : undefined;
       if (job) job.apiUsage = null;
       const r = await postJson(url, { model, messages, temperature: 0.2, max_tokens: Number(env.OPTIMIZE_LLM_MAX_TOKENS || 4096), stream: !!job, ...(job ? { stream_options: { include_usage: true } } : {}) }, Number(env.OPTIMIZE_LLM_TIMEOUT_MS || 600000), hk);
       if (job) job.req = null;
       if (r.status < 200 || r.status >= 300) throw new Error('The model server answered ' + r.status + (r.text ? ': ' + r.text.slice(0, 160).replace(/\s+/g, ' ') : '') + '.');
-      const addUse = (u) => { if (!job) return; const pr = (u && Number(u.prompt_tokens)) || estTokens(messages.map((m) => m.content).join('\n')), co = (u && Number(u.completion_tokens)) || job.tokens || estTokens(job.raw); job.usage.prompt += pr; job.usage.completion += co; job.usage.lastPrompt = pr; job.usage.exact = !!(u && u.prompt_tokens); job.usageDone = true; };
-      if (r.sse) { if (typeof r.content !== 'string' || !r.content) throw new Error('The model server returned no text.'); addUse(job && job.apiUsage); return { text: r.content, model }; }
+      const addUse = async (u) => {
+        if (!job) return;
+        let pr = Number(u && u.prompt_tokens) || 0, ps = pr ? 'api' : '';
+        if (!pr && job.pre) { pr = job.pre.n; ps = job.pre.src; }
+        if (!pr) { pr = estTokens(messages.map((m) => m.content).join('\n')); ps = 'estimate'; }
+        let co = Number(u && u.completion_tokens) || 0, cs = co ? 'api' : '';
+        if (!co) { const n = await tokenize(url, job.raw); if (n != null) { co = n + (job.reasoning || 0); cs = 'tokenizer'; } }
+        if (!co) { co = job.tokens || estTokens(job.raw); cs = 'estimate'; }
+        job.usage.prompt += pr; job.usage.completion += co; job.usage.lastPrompt = pr; job.usage.src = minSrc(job.usage.src, minSrc(ps, cs)); job.usageDone = true;
+      };
+      if (r.sse) { if (typeof r.content !== 'string' || !r.content) throw new Error('The model server returned no text.'); await addUse(job && job.apiUsage); return { text: r.content, model }; }
       let j; try { j = JSON.parse(r.text); } catch { throw new Error('The model server returned something that is not JSON.'); }
       const c = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
       if (typeof c !== 'string') throw new Error('The model server returned no text.');
-      if (job) { job.raw = c; job.tokens = job.tokens || estTokens(c); } addUse(j.usage);
+      if (job) { job.raw = c; job.tokens = job.tokens || estTokens(c); } await addUse(j.usage);
       return { text: c, model };
     } catch (e) {
       const code = (e && e.code) || '';
@@ -299,10 +340,23 @@ module.exports = function mountAiEdit(ctx) {
         }
       }
     }
+    const pp = loadPatches(part).slice(-12);
+    if (pp.length) add('Patches made in this job so far', pp.map((p) => `[${p.status}] ${p.title} — ${[...new Set((p.edits || []).map((e) => e.path))].join(', ')}`).join('\n'), 1800);
     add('Correctness gate', readText(path.join(dir, 'Report/verification.md')), 4000);
     add('Hook graph', readText(path.join(dir, 'Report/hookgraph.md')), 3500);
     add('Analyzer disagreements', readText(path.join(dir, 'Report/agreement.md')), 2500);
     return out.join('\n\n');
+  }
+
+  // the conversation the model gets back: as many recent turns as fit in a share of its context window (not just the last few)
+  function recallHistory(history) {
+    const budget = Math.max(12000, Math.floor((ctxTokens || 16384) * 3.3 * 0.3)); let used = 0; const out = [];
+    for (const h of history.filter((x) => !x.err).reverse()) {
+      const t = String(h.text).slice(0, 6000);
+      if (used + t.length > budget && out.length >= 2) break;
+      used += t.length; out.unshift({ role: h.role, content: t });
+    }
+    return out;
   }
 
   async function modelReply(part, b, history, job) {
@@ -312,7 +366,7 @@ module.exports = function mountAiEdit(ctx) {
     const sections = [], ctxText = gather(part, b, sections);
     stepTo(job, 'context', 'Read the project', sections.length + ' section' + (sections.length === 1 ? '' : 's') + ' · ' + Math.round(ctxText.length / 1000) + 'k characters');
     if (job) job.sections = sections.map((s) => s.replace(/\s*\(.*$/, '').slice(0, 60));
-    const base =[{ role: 'system', content: SYSTEM }, ...history.filter((h) => !h.err).slice(-6).map((h) => ({ role: h.role, content: String(h.text).slice(0, 1500) })),
+    const base =[{ role: 'system', content: SYSTEM }, ...recallHistory(history),
       { role: 'user', content: `Project context:\n${ctxText}\n\nRequest: ${b.message}${hint ? '\n\n' + hint : ''}` }];
     let messages = base, lastErr = '';
     for (let attempt = 1; attempt <= 3; attempt++) {
@@ -336,9 +390,6 @@ module.exports = function mountAiEdit(ctx) {
   // ---- routes ----
   const jobs = new Map();
   setInterval(() => { const t = Date.now(); for (const [k, j] of jobs) if (j.ended && t - j.ended > 1800000) jobs.delete(k); }, 300000).unref();
-  const hits = new Map();
-  const limited = (who, n) => { const now = Date.now(), a = (hits.get(who) || []).filter((t) => now - t < 3600000); a.push(now); hits.set(who, a); return a.length > n; };
-  const actor = (req) => (req.me && req.me.id ? 'u' + req.me.id : req.ip || '?');
   const part404 = (req, res) => { const part = findPart(req); if (!part) res.status(404).json({ error: 'not ready' }); return part; };
 
   function snippetFor(part, spec) {
@@ -352,21 +403,26 @@ module.exports = function mountAiEdit(ctx) {
     }
     return { path: file.norm, start: at + 1, kind, text: cut(ls.slice(at), 14), more: Math.max(0, ls.length - at - 14) };
   }
-  const sessionUsage = (chat) => chat.reduce((a, m) => { if (m.u) { a.prompt += m.u.prompt || 0; a.completion += m.u.completion || 0; } return a; }, { prompt: 0, completion: 0 });
+  const sessionUsage = (chat) => chat.reduce((a, m) => { if (m.u) { a.prompt += m.u.prompt || 0; a.completion += m.u.completion || 0; a.src = minSrc(a.src, m.u.src || 'estimate'); } return a; }, { prompt: 0, completion: 0, src: '' });
   const lastPromptOf = (chat) => { for (let i = chat.length - 1; i >= 0; i--) if (chat[i].u) return chat[i].u.lastPrompt || 0; return 0; };
 
   app.get(`${B}/jobs/:id/ai`, guard, async (req, res) => {
     const part = part404(req, res); if (!part) return;
     const chat = loadChat(part), ctx = LLM.url() ? await probeCtx() : 0, su = sessionUsage(chat);
-    res.json({ llm: { configured: !!LLM.url(), deep: !!LLM.urlDeep() }, patches: loadPatches(part).slice(-20).reverse().map((p) => view(p, false, part)), chat: chat.slice(-30),
-      usage: { prompt: su.prompt, completion: su.completion, lastPrompt: lastPromptOf(chat), ctx: ctx || 0 } });
+    res.json({ llm: { configured: !!LLM.url(), deep: !!LLM.urlDeep() }, patches: loadPatches(part).slice(-20).reverse().map((p) => view(p, false, part)), chat: chat.slice(-120),
+      usage: { prompt: su.prompt, completion: su.completion, lastPrompt: lastPromptOf(chat), ctx: ctx || 0, src: su.src } });
+  });
+
+  app.post(`${B}/jobs/:id/ai/reset`, guard, (req, res) => {
+    const part = part404(req, res); if (!part) return;
+    const live = jobs.get(part.dir); if (live && live.state === 'running') return res.status(409).json({ error: 'A request is still running.' });
+    saveChat(part, []); res.json({ ok: true });
   });
 
   app.post(`${B}/jobs/:id/ai/chat`, guard, express.json({ limit: '40kb' }), (req, res) => {
     const part = part404(req, res); if (!part) return;
     const b = req.body || {}, message = String(b.message || '').trim().slice(0, 2000);
     if (!message) return res.status(400).json({ error: 'Type a request first.' });
-    if (limited(actor(req), 40)) return res.status(429).json({ error: 'Too many requests. Try again later.' });
     const key = part.dir, live = jobs.get(key);
     if (live && live.state === 'running') return res.status(409).json({ error: 'A request is already running for this job. Wait for it to finish.' });
     const spec = { message, action: ['explain', 'fix', 'improve', 'chat'].includes(b.action) ? b.action : 'chat', file: typeof b.file === 'string' ? b.file : null,
@@ -377,11 +433,11 @@ module.exports = function mountAiEdit(ctx) {
     (async () => {
       const chat = loadChat(part); chat.push({ role: 'user', text: message, at: Date.now() });
       let out; try { out = await modelReply(part, spec, chat.slice(0, -1), job); } catch (e) { out = e && e.stopped ? { reply: 'Stopped. Nothing was changed.' } : { reply: String((e && e.message) || e), err: true }; }
-      chat.push({ role: 'assistant', text: out.reply, at: Date.now(), patch: out.patch ? out.patch.id : null, err: out.err ? 1 : undefined, u: job.usage.prompt || job.usage.completion ? { prompt: job.usage.prompt, completion: job.usage.completion, lastPrompt: job.usage.lastPrompt } : undefined }); saveChat(part, chat);
+      chat.push({ role: 'assistant', text: out.reply, at: Date.now(), patch: out.patch ? out.patch.id : null, err: out.err ? 1 : undefined, u: job.usage.prompt || job.usage.completion ? { prompt: job.usage.prompt, completion: job.usage.completion, lastPrompt: job.usage.lastPrompt, src: job.usage.src || 'estimate' } : undefined }); saveChat(part, chat);
       audit(req, 'ai-chat', `${part.dylibName}${spec.file ? ':' + spec.file : ''}`, `job ${req.params.id}${out.patch ? ' patch ' + out.patch.id : ''}`);
       return { reply: out.reply, patch: out.patch ? view(out.patch, true, part) : null };
     })().then((r) => { job.result = r; job.state = 'done'; }, (e) => { job.error = String((e && e.message) || e).slice(0, 300); job.state = 'error'; }).finally(() => { job.ended = Date.now(); });
-    probeCtx().then(() => res.status(202).json({ job: job.id, snippet, ctx: ctxTokens || 0, usage: { prompt: job.base.prompt, completion: job.base.completion, lastPrompt: job.baseLast } }), () => res.status(202).json({ job: job.id, snippet }));
+    probeCtx().then(() => res.status(202).json({ job: job.id, snippet, ctx: ctxTokens || 0, usage: { prompt: job.base.prompt, completion: job.base.completion, lastPrompt: job.baseLast, src: job.base.src } }), () => res.status(202).json({ job: job.id, snippet }));
   });
 
   app.get(`${B}/jobs/:id/ai/jobs/:jid`, guard, (req, res) => {
@@ -394,7 +450,7 @@ module.exports = function mountAiEdit(ctx) {
       return res.json({ state: 'running', seconds: Math.round((now - job.started) / 1000), attempt: job.attempt, model: job.model || null, deep: !!job.deep,
         tokens: job.tokens, tps: job.firstTok && job.tokens > 3 ? Math.round(live * 10) / 10 : 0, stalled: !!(job.lastTok && now - job.lastTok > 15000), sections: job.sections,
         partial: L && L.started ? L.text.slice(0, 6000) : '', phase: p ? p.key : null,
-        usage: { prompt: job.base.prompt + job.usage.prompt, completion: job.base.completion + job.usage.completion + (job.usageDone ? 0 : job.tokens), lastPrompt: job.usage.lastPrompt || job.baseLast, ctx: ctxTokens || 0 },
+        usage: { prompt: job.base.prompt + job.usage.prompt, completion: job.base.completion + job.usage.completion + (job.usageDone ? 0 : job.tokens), lastPrompt: (job.pre && job.pre.n) || job.usage.lastPrompt || job.baseLast, ctx: ctxTokens || 0, src: minSrc(job.usage.src || (job.pre && job.pre.src) || '', job.base.src || '') },
         steps: job.steps.map((s) => ({ key: s.key, label: s.label, detail: s.detail || '', ms: (s.end || now) - s.start, active: !s.end })) });
     }
     if (job.state === 'error') return res.json({ state: 'error', error: job.error });
