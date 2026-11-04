@@ -791,14 +791,20 @@ final class AiDecryptViewModel: ObservableObject {
                 "For any other request, just answer normally about the image."
             ))
         }
-        out += messages[min(foldStartIndex(), index)..<index].map { m -> AiChatMessage in
-            guard m.gifURL != nil, m.toolCalls == nil else { return m }
-            var c = m
-            let label = "[sent a GIF: \(m.gifTitle ?? "GIF")]"
-            c.content = m.content.isEmpty ? label : m.content + " " + label
-            return c
-        }
-        return out
+        // Qwen's chat template allows exactly ONE system message, and it must be first — fold every note into it.
+        var merged = AiChatMessage(role: .system, content: out.map { $0.content }.joined(separator: "\n\n"))
+        merged.content = merged.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        var result: [AiChatMessage] = [merged]
+        result += messages[min(foldStartIndex(), index)..<index]
+            .filter { $0.role != .system }
+            .map { m -> AiChatMessage in
+                guard m.gifURL != nil, m.toolCalls == nil else { return m }
+                var c = m
+                let label = "[sent a GIF: \(m.gifTitle ?? "GIF")]"
+                c.content = m.content.isEmpty ? label : m.content + " " + label
+                return c
+            }
+        return result
     }
 
     /// A photo in the history routes the turn to the vision model (which sees images but can't tool-call);
@@ -1343,10 +1349,13 @@ struct AiDecryptChatView: View {
         .padding(.top, 6)
     }
 
+    @State private var scrollPending = false
+
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 10) {
+                // plain VStack: LazyVStack re-estimates row heights while the last bubble grows, which made the list jitter and re-scroll in a loop
+                VStack(spacing: 10) {
                     ForEach(viewModel.messages.filter { $0.role == .user || $0.role == .assistant }) { message in
                         VStack(alignment: .leading, spacing: 8) {
                             if !message.content.isEmpty || message.imageData != nil || message.gifURL != nil {
@@ -1361,12 +1370,26 @@ struct AiDecryptChatView: View {
                 }
                 .padding(.horizontal, 14).padding(.top, 66).padding(.bottom, 10)
             }
-            .onChange(of: viewModel.isStreaming) { s in if s { withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } } }
-            .onChange(of: viewModel.messages.last?.content) { _ in
-                guard let last = viewModel.messages.last(where: { $0.role == .user || $0.role == .assistant }) else { return }
-                if viewModel.isStreaming { proxy.scrollTo("bottom", anchor: .bottom) }
-                else { proxy.scrollTo(last.id, anchor: .bottom) }
+            .onChange(of: viewModel.isStreaming) { s in
+                // one settled scroll when the reply starts and one when it ends — no animation, so nothing fights the layout
+                scrollBottom(proxy, delay: 0.05)
+                if !s { scrollBottom(proxy, delay: 0.25) }
             }
+            .onChange(of: viewModel.messages.count) { _ in scrollBottom(proxy, delay: 0.05) }
+            .onChange(of: viewModel.messages.last?.content) { _ in
+                // while streaming, follow the text at most ~7x/second instead of on every token batch
+                guard viewModel.isStreaming, !scrollPending else { return }
+                scrollPending = true
+                scrollBottom(proxy, delay: 0.14) { scrollPending = false }
+            }
+        }
+    }
+
+    private func scrollBottom(_ proxy: ScrollViewProxy, delay: Double, done: (() -> Void)? = nil) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { proxy.scrollTo("bottom", anchor: .bottom) }
+            done?()
         }
     }
 
