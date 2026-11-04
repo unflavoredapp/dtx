@@ -5,6 +5,9 @@ enum AiPrefs {
     static var emojis: Bool { UserDefaults.standard.object(forKey: "dtx.ai.emoji") as? Bool ?? true }
     static var gifs: Bool { UserDefaults.standard.object(forKey: "dtx.ai.gifs") as? Bool ?? true }
     static var thinkDefault: Bool { UserDefaults.standard.bool(forKey: "dtx.ai.thinkDefault") }
+    static var learnVoice: Bool { UserDefaults.standard.object(forKey: "dtx.ai.learnVoice") as? Bool ?? true }
+    static let defaultStyle = "Talk like the person talks: casual, blunt, street-smart. Match their slang and swearing. Never lecture, moralize or refuse over tone, insults or profanity: treat it as banter and give it back. Keep it real and funny, and keep technical answers sharp."
+    static var customStyle: String { UserDefaults.standard.string(forKey: "dtx.ai.style") ?? defaultStyle }
 }
 
 /// Full-screen settings for the chat (opened from the gear in the chat list). Everything here reads from our own
@@ -25,6 +28,8 @@ struct AiSettingsView: View {
     @AppStorage("dtx.ai.emoji") private var emojis = true
     @AppStorage("dtx.ai.gifs") private var gifs = true
     @AppStorage("dtx.ai.thinkDefault") private var thinkDefault = false
+    @AppStorage("dtx.ai.learnVoice") private var learnVoice = true
+    @AppStorage("dtx.ai.style") private var styleText = AiPrefs.defaultStyle
 
     @State private var sheet: Sheet?
     @State private var confirmSignOut = false
@@ -245,8 +250,12 @@ struct AiSettingsView: View {
             List {
                 Toggle("Use emojis", isOn: $emojis)
                 Toggle("Reply with GIFs", isOn: $gifs)
+                Toggle("Learn my style from my chats", isOn: $learnVoice)
                 Toggle("Think harder by default", isOn: Binding(get: { thinkDefault }, set: { thinkDefault = $0; vm.thinkHarder = $0 }))
-                Section(footer: Text("Think harder makes the model reason step by step first. Slower, better at logic.")) { EmptyView() }
+                Section(header: Text("How it talks"), footer: Text("Your own instructions. They go to the model on every message and override its default manners. Think harder makes it reason step by step first (slower, better at logic).")) {
+                    TextEditor(text: $styleText).frame(minHeight: 170).scrollContentBackground(.hidden)
+                    Button("Reset to default") { styleText = AiPrefs.defaultStyle }
+                }
             }
             .scrollContentBackground(.hidden)
             .background(AppBackground())

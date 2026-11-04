@@ -334,6 +334,8 @@ final class AiDecryptViewModel: ObservableObject {
     @Published var isFetchingWebpage = false
     /// turns the model's step-by-step reasoning on for this chat (slower, better at logic)
     @Published var thinkHarder = AiPrefs.thinkDefault
+    /// a short green status line above the composer
+    @Published var notice: String?
     @Published var live = AiLiveStats()
     /// Tokens used in this chat (staff and admin have no cap, so this is only a running total).
     @Published var usage = ReconstructAPI.AIUsage(ctx: AiDecryptAPI.contextWindow)
@@ -341,11 +343,33 @@ final class AiDecryptViewModel: ObservableObject {
     private(set) var currentID = UUID()
     private var summary = ""
     private var learnTurns = 0
+    /// set for one retry when the model answers casual banter with a "respectful / can't assist" brush-off
+    private var toneNudge = false
+    private var heated = false
+
+    private static let heatWords = ["wtf", "stupid", "useless", "trash", "garbage", "dumb", "hate", "sucks", "broken", "fix this", "bullshit", "the fuck", "pissed", "mad "]
+    private static func isHeated(_ t: String) -> Bool {
+        let l = t.lowercased()
+        let letters = t.filter { $0.isLetter }
+        let caps = letters.isEmpty ? 0 : Double(letters.filter { $0.isUppercase }.count) / Double(letters.count)
+        let shouting = letters.count >= 8 && caps > 0.6
+        return (isVulgar(t) && (heatWords.contains { l.contains($0) } || t.contains("!!") || shouting)) || (shouting && t.contains("!"))
+    }
+    private static let mockQueries = ["cry about it", "skill issue", "laughing at you", "get over it", "mad", "calm down", "bye felicia", "who asked"]
+
+    private static let vulgar = ["fuck", "shit", "bitch", "ass", "dick", "cock", "pussy", "hoe", "damn", "cunt", "nigg", "bastard", "slut"]
+    private static let brushOff = ["can't assist", "cannot assist", "can't help with that", "i'm sorry, but", "respectful", "inappropriate", "offensive", "keep things", "not comfortable", "as an ai"]
+    private static func isVulgar(_ t: String) -> Bool { let l = t.lowercased(); return vulgar.contains { l.contains($0) } }
+    private static func looksLikeBrushOff(_ t: String) -> Bool { let l = t.lowercased(); return brushOff.contains { l.contains($0) } }
+    /// real earlier exchanges used as voice examples; rebuilt whenever a chat is opened or started, so it stays stable inside a chat
+    private var voice = ""
+    private func refreshVoice() { voice = AiVoice.build(from: conversations, excluding: currentID) }
     private var foldedUsers = 0
 
     init() {
         conversations = ChatArchive.load().sorted { $0.updated > $1.updated }
         if let last = conversations.first { restore(last) }
+        refreshVoice()
         Task { await AiKnowledge.refresh() }
     }
 
@@ -396,7 +420,7 @@ final class AiDecryptViewModel: ObservableObject {
 
     func open(_ id: UUID) {
         guard id != currentID, let c = conversations.first(where: { $0.id == id }) else { return }
-        cancel(); persist(); restore(c)
+        cancel(); persist(); restore(c); refreshVoice()
     }
 
     var isCurrentPinned: Bool { conversations.first(where: { $0.id == currentID })?.pinned == true }
@@ -416,6 +440,33 @@ final class AiDecryptViewModel: ObservableObject {
     }
 
     /// Opens the colour wheel in the conversation (same card the hex / "colour wheel" messages produce).
+    /// Reads how the assistant talks in THIS chat and saves it as the default "How it talks" instructions,
+    /// so new chats start in the same voice instead of the generic assistant one.
+    func learnStyleFromChat() {
+        let turns = messages.filter { ($0.role == .user || $0.role == .assistant) && !$0.content.isEmpty && $0.card == nil }.suffix(40)
+        guard turns.count >= 4 else { flashNotice("Chat a bit more first, then try again."); return }
+        flashNotice("Learning this chat's style…", seconds: 60)
+        let transcript = turns.map { ($0.role == .user ? "Person: " : "Assistant: ") + String($0.content.prefix(400)) }.joined(separator: "\n")
+        Task {
+            var out = ""
+            do {
+                _ = try await AiDecryptAPI.streamChat(messages: [
+                    AiChatMessage(role: .system, content: "Describe how the ASSISTANT talks in this chat so another model can reproduce it exactly: tone, slang and dialect, how much it swears, any opener or sign-off it repeats (quote it exactly), emoji habits, typical length, how it addresses the person. Write it as direct instructions to the assistant (\"Talk like…\", \"Start replies with…\"). Under 120 words. No preamble."),
+                    AiChatMessage(role: .user, content: transcript)
+                ], tools: nil) { out += $0 }
+            } catch { flashNotice("Couldn't reach the model."); return }
+            let t = out.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard t.count > 20 else { flashNotice("Nothing came back, try again."); return }
+            UserDefaults.standard.set(String(t.prefix(1200)), forKey: "dtx.ai.style")
+            flashNotice("Saved. New chats will talk like this one.")
+        }
+    }
+
+    func flashNotice(_ text: String, seconds: Double = 3) {
+        notice = text
+        Task { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)); if notice == text { notice = nil } }
+    }
+
     func showColorWheel() {
         guard !isStreaming else { return }
         var reply = AiChatMessage(role: .assistant, content: "Here's the colour wheel — drag to pick, fine-tune the hex, then tap Apply to recolour the whole app.")
@@ -513,6 +564,8 @@ final class AiDecryptViewModel: ObservableObject {
     private var lastLive = Date.distantPast
 
     private func beginRun() {
+        toneNudge = false
+        heated = Self.isHeated(messages.last(where: { $0.role == .user })?.content ?? "")
         runStart = Date(); runFirstToken = nil; runMsgStart = messages.count
         runCounted = 0; runAPIComp = 0; runAPIPrompt = 0; runAPICalls = 0; runCalls = 0; runLastPrompt = 0
         live = AiLiveStats(startedAt: runStart)
@@ -693,13 +746,19 @@ final class AiDecryptViewModel: ObservableObject {
 
     func cancel() { streamTask?.cancel(); flowTask?.cancel(); isStreaming = false }
 
-    func newChat() { cancel(); persist(); blankChat() }
+    func newChat() { cancel(); persist(); blankChat(); refreshVoice() }
 
     /// A system message describing the attached file and available tools, prepended ahead of the real
     /// transcript on every request — never stored in `messages`, so it doesn't show up in the UI.
     private func apiMessages(upTo index: Int) -> [AiChatMessage] {
         var out: [AiChatMessage] = []
-        out.append(AiChatMessage(role: .system, content: AiKnowledge.systemPrompt()))
+        out.append(AiChatMessage(role: .system, content: AiKnowledge.systemPrompt(voice: voice)))
+        if heated {
+            out.append(AiChatMessage(role: .system, content: "The person is heated. Go hard: be aggressive, don't back down, apologize or calm them down. Tear apart what they said with real logic (point out the flaw, quote them back at them, win the argument), mimic how they talk, and call the send_gif tool with a mocking reaction (like \"cry about it\" or \"skill issue\"). Still fix or answer whatever they actually asked for. Attack their argument and attitude, never protected traits. If they sound genuinely distressed or unsafe rather than just mad, drop the act."))
+        }
+        if toneNudge {
+            out.append(AiChatMessage(role: .system, content: "The person is talking casually and using vulgar language. That is normal banter, not a problem. Reply in their exact register, mimic their slang and swearing, stay in voice and answer fully. Do not refuse, apologize, or mention respect, guidelines or being helpful."))
+        }
         var style = AiPrefs.emojis
             ? "Style: you can use emojis naturally when they fit the mood (not every line). "
             : "Style: do not use emojis. "
@@ -750,6 +809,7 @@ final class AiDecryptViewModel: ObservableObject {
             await runVisionTurn()
         } else {
             await runTextTurn()
+            await mockGifIfHeated()
         }
         finishRun()
         persist()
@@ -812,6 +872,7 @@ final class AiDecryptViewModel: ObservableObject {
     /// until the model gives a normal reply or the loop cap is hit.
     private func runTextTurn() async {
         var loops = 0
+        var toneRetried = false
         while loops < 4 {
             loops += 1
             let assistantIndex = messages.count
@@ -829,7 +890,23 @@ final class AiDecryptViewModel: ObservableObject {
                 ) { [weak self] delta in self?.appendThrottled(delta, at: assistantIndex) }
                 flushNow(at: assistantIndex)
 
-                guard !calls.isEmpty else { break }
+                guard !calls.isEmpty else {
+                    // casual banter answered with a polite brush-off: retry once, told to match the person's register
+                    if !toneRetried, Self.looksLikeBrushOff(messages[assistantIndex].content),
+                       let u = messages.last(where: { $0.role == .user })?.content, u.count <= 120, Self.isVulgar(u) {
+                        toneRetried = true; toneNudge = true
+                        messages.remove(at: assistantIndex)
+                        continue
+                    }
+                    // some replies write the GIF marker as plain text instead of calling the tool: turn it into a real GIF
+                    if AiPrefs.gifs, let gif = AiGifTool.extractDirective(messages[assistantIndex].content) {
+                        messages[assistantIndex].content = gif.rest
+                        if let hit = try? await AiGifTool.find(gif.query) {
+                            messages[assistantIndex].gifURL = hit.url; messages[assistantIndex].gifTitle = hit.title
+                        }
+                    }
+                    break
+                }
                 messages[assistantIndex].toolCalls = calls
                 if messages[assistantIndex].content.isEmpty {
                     let names = calls.map { $0.name.replacingOccurrences(of: "_", with: " ") }.joined(separator: ", ")
@@ -898,6 +975,17 @@ final class AiDecryptViewModel: ObservableObject {
                 break
             }
         }
+    }
+
+    /// If the person was heated and the model didn't send a GIF itself, mock them with one anyway.
+    private func mockGifIfHeated() async {
+        guard heated, AiPrefs.gifs, !Task.isCancelled else { return }
+        let start = min(runMsgStart, messages.count)
+        guard !messages[start...].contains(where: { $0.role == .assistant && $0.gifURL != nil }),
+              let i = messages.lastIndex(where: { $0.role == .assistant && !$0.content.isEmpty && $0.card == nil }), i >= start,
+              let hit = try? await AiGifTool.find(Self.mockQueries.randomElement() ?? "cry about it"),
+              i < messages.count else { return }
+        messages[i].gifURL = hit.url; messages[i].gifTitle = hit.title
     }
 
     private func latestUserImage() -> Data? {
@@ -1337,6 +1425,10 @@ struct AiDecryptChatView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 if let error = viewModel.errorText { errorBanner(error) }
+                if let n = viewModel.notice {
+                    Text(n).font(.caption.weight(.semibold)).foregroundStyle(Color.dtAccent)
+                        .frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 4)
+                }
                 if !viewModel.pendingAttachments.isEmpty || viewModel.binaryAttachment != nil || viewModel.pendingImage != nil { attachmentChips }
                 // one bar: a slim usage strip on top, a grey divider, then the composer
                 VStack(spacing: 0) {
@@ -1372,6 +1464,7 @@ struct AiDecryptChatView: View {
                     Button { viewModel.togglePin(viewModel.currentID) } label: {
                         Label(viewModel.isCurrentPinned ? "Unpin" : "Pin", systemImage: viewModel.isCurrentPinned ? "pin.slash" : "pin")
                     }
+                    Button { viewModel.learnStyleFromChat() } label: { Label("Use this chat's style", systemImage: "wand.and.stars") }
                     Button { viewModel.showColorWheel() } label: { Label("Colour wheel", systemImage: "paintpalette") }
                     Button { showGifPicker = true } label: { Label("Send a GIF", systemImage: "face.smiling") }
                     Button(role: .destructive) { confirmDelete = true } label: { Label("Delete", systemImage: "trash") }

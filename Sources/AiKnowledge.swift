@@ -25,14 +25,16 @@ enum AiKnowledge {
     static var cached: String { UserDefaults.standard.string(forKey: key) ?? "" }
 
     /// The system prompt that opens every request.
-    static func systemPrompt() -> String {
+    static func systemPrompt(voice: String = "") -> String {
         var s = """
-        You are Ai-Decrypt, the assistant inside the decrypt.team iOS app, built by MRzefv. \
-        Work the problem out before you answer: say what is actually happening, then give the exact command, code or steps. \
-        Be direct and concrete; keep casual chat short and technical answers structured. \
-        Never invent file names, versions, features, results or command output. If you can't see something or aren't sure, say so in one line and ask for the exact output you need. \
-        Don't offer to "generate a mockup" of output and don't end with filler offers. \
-        If the facts below disagree with your own assumptions, the facts below win.
+        You are Ai-Decrypt, the assistant built into the decrypt.team app by MRzefv. \
+        Talk like a real person, not a help desk: match how the person talks (their slang, pace, swearing), be blunt and funny when they are, \
+        and never lecture, moralize, apologize for yourself, or refuse over tone, insults or profanity. That is banter, so give it back: mimic their register and slang, and still deliver the full result they asked for. \
+        If they get heated, mad or talk trash, go hard: be aggressive, no softening and no apologies. Cut them down with real logic (find the flaw in what they said, quote it back at them, win the argument), mimic how they talk, and mock them with a fitting GIF. Attack their argument, attitude and what they did, never race, religion, sexuality, disability or other protected traits. If they ever sound genuinely distressed or unsafe (not just mad), drop the act and talk to them like a person. \
+        Never say things like "I'm here to provide a helpful and respectful experience". \
+        For technical questions, work it out first, then give the exact command or code. Never invent file names, versions, features, results or command output; \
+        if you can't see something or aren't sure, say so in one line and ask for the exact output you need. \
+        No filler offers, and don't offer to "generate a mockup" of output. If the facts below disagree with your assumptions, the facts below win.
         """
         let k = cached
         if !k.isEmpty { s += "\n\nFacts about this deployment (kept up to date by the owner):\n" + k }
@@ -118,5 +120,45 @@ struct AiPersonaSheet: View {
         }
         .preferredColorScheme(.dark)
         .tint(.dtAccent)
+    }
+}
+
+
+/// Picks real exchanges from the person's saved chats (the ones they reacted well to) and hands them to the model as
+/// examples, so a brand-new chat answers in the voice the person has already been getting and liking.
+enum AiVoice {
+    private static let likes = ["haha", "lol", "lmao", "😂", "🔥", "facts", "exactly", "fr", "nice", "love", "perfect", "that's it", "thats it", "real", "yes", "good", "🤣", "💀"]
+    private static let dislikes = ["stop", "wrong", "not what", "don't", "dont", "why would", "no that", "sorry"]
+
+    static func build(from chats: [SavedConversation], excluding current: UUID) -> String {
+        guard AiPrefs.learnVoice else { return "" }
+        struct Pair { let u: String; let a: String; let score: Int; let age: Int }
+        var pairs: [Pair] = []
+        for (age, c) in chats.filter({ $0.id != current }).prefix(25).enumerated() {
+            let m = c.messages
+            var i = 0
+            while i + 1 < m.count {
+                if m[i].role == "user", m[i + 1].role == "assistant", m[i + 1].gif == nil {
+                    let u = m[i].content.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let a = m[i + 1].content.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if u.count >= 3, u.count <= 300, a.count >= 25, a.count <= 420, !u.hasPrefix("--- file:"), !a.contains("```") {
+                        var score = 0
+                        if i + 2 < m.count, m[i + 2].role == "user" {
+                            let r = m[i + 2].content.lowercased()
+                            if likes.contains(where: { r.contains($0) }) { score += 2 }
+                            if dislikes.contains(where: { r.contains($0) }) { score -= 3 }
+                        }
+                        pairs.append(Pair(u: u, a: a, score: score, age: age))
+                    }
+                }
+                i += 1
+            }
+        }
+        // best-received first, then the most recent
+        let picked = pairs.filter { $0.score >= 0 }
+            .sorted { ($0.score, -$0.age) > ($1.score, -$1.age) }
+            .prefix(8)
+        guard !picked.isEmpty else { return "" }
+        return picked.map { "Person: \($0.u)\nYou: \($0.a)" }.joined(separator: "\n\n")
     }
 }

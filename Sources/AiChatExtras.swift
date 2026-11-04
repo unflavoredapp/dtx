@@ -322,8 +322,8 @@ enum AiGifTool {
     }
 
     static func extractDirective(_ text: String) -> (query: String, rest: String)? {
-        guard let r = text.range(of: #"\[GIF\]([\s\S]*?)\[/GIF\]"#, options: .regularExpression) else { return nil }
-        let inner = text[r].replacingOccurrences(of: "[GIF]", with: "").replacingOccurrences(of: "[/GIF]", with: "")
+        guard let r = text.range(of: #"\[GIF\]([\s\S]*?)\[/?GIF\]"#, options: .regularExpression) else { return nil }
+        let inner = text[r].replacingOccurrences(of: "[/GIF]", with: "").replacingOccurrences(of: "[GIF]", with: "").replacingOccurrences(of: "\"", with: "")
         var rest = text; rest.removeSubrange(r)
         let q = inner.trimmingCharacters(in: .whitespacesAndNewlines)
         return q.isEmpty ? nil : (q, rest.trimmingCharacters(in: .whitespacesAndNewlines))
