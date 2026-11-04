@@ -701,7 +701,7 @@ function mount(app, o) {
     return kept;
   }
   // Ai-Decrypt editing: chat -> reviewable patch -> Apply / Revert (see aiedit.js)
-  try { require('./aiedit')({ app, express, B, guard, findPart, outRoot, audit, saveFile, env: process.env }); } catch (e) { console.error('[decomp] ai edit routes not mounted:', e.message); }
+  try { require('./aiedit')({ app, express, B, guard, findPart, outRoot, audit, saveFile, findSdk: () => tool.findSdk(o.dataDir), env: process.env }); } catch (e) { console.error('[decomp] ai edit routes not mounted:', e.message); }
 
   // ---- Editor extras: diff baseline, changed-file list, per-function evidence ----
   function origPath(part, rel) {

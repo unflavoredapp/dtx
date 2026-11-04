@@ -5,6 +5,10 @@ enum AiPrefs {
     static var emojis: Bool { UserDefaults.standard.object(forKey: "dtx.ai.emoji") as? Bool ?? true }
     static var gifs: Bool { UserDefaults.standard.object(forKey: "dtx.ai.gifs") as? Bool ?? true }
     static var thinkDefault: Bool { UserDefaults.standard.bool(forKey: "dtx.ai.thinkDefault") }
+    /// code edits from the chat are written straight into the project files (Revert stays on the card)
+    static var autoApplyCode: Bool { UserDefaults.standard.object(forKey: "dtx.ai.autoApplyCode") as? Bool ?? true }
+    /// build the dylib right after an edit is written
+    static var autoBuild: Bool { UserDefaults.standard.object(forKey: "dtx.ai.autoBuild") as? Bool ?? false }
     static var learnVoice: Bool { UserDefaults.standard.object(forKey: "dtx.ai.learnVoice") as? Bool ?? true }
     static let defaultStyle = "Talk like the person talks: casual, blunt, street-smart. Match their slang and swearing. Never lecture, moralize or refuse over tone, insults or profanity: treat it as banter and give it back. Keep it real and funny, and keep technical answers sharp."
     static var customStyle: String { UserDefaults.standard.string(forKey: "dtx.ai.style") ?? defaultStyle }
@@ -29,6 +33,8 @@ struct AiSettingsView: View {
     @AppStorage("dtx.ai.gifs") private var gifs = true
     @AppStorage("dtx.ai.thinkDefault") private var thinkDefault = false
     @AppStorage("dtx.ai.learnVoice") private var learnVoice = true
+    @AppStorage("dtx.ai.autoApplyCode") private var autoApplyCode = true
+    @AppStorage("dtx.ai.autoBuild") private var autoBuild = false
     @AppStorage("dtx.ai.style") private var styleText = AiPrefs.defaultStyle
 
     @State private var sheet: Sheet?
@@ -36,7 +42,7 @@ struct AiSettingsView: View {
     @State private var confirmClearChats = false
     @State private var confirmClearSigned = false
 
-    private enum Sheet: Identifiable { case personal, memory, plugins, usage, updates, changelog, about, colour
+    private enum Sheet: Identifiable { case personal, memory, plugins, usage, updates, changelog, about, colour, health
         var id: Int { hashValue } }
 
     private var version: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0" }
@@ -55,6 +61,7 @@ struct AiSettingsView: View {
                         row("face.smiling", "Personalization") { sheet = .personal }
                         row("book.closed", "Memory") { sheet = .memory }
                         row("puzzlepiece.extension", "Plugins") { sheet = .plugins }
+                        row("stethoscope", "AI server check") { sheet = .health }
                     }
                     section("Account") {
                         valueRow("person", "Username", name)
@@ -113,6 +120,7 @@ struct AiSettingsView: View {
             case .changelog: ChangelogView()
             case .about: aboutSheet
             case .colour: colourSheet
+            case .health: AiServerHealthSheet()
             }
         }
         .confirmationDialog("Log out of \(name)?", isPresented: $confirmSignOut, titleVisibility: .visible) {
@@ -251,6 +259,8 @@ struct AiSettingsView: View {
                 Toggle("Use emojis", isOn: $emojis)
                 Toggle("Reply with GIFs", isOn: $gifs)
                 Toggle("Learn my style from my chats", isOn: $learnVoice)
+                Toggle("Write code edits straight into the files", isOn: $autoApplyCode)
+                Toggle("Build the dylib right after an edit", isOn: $autoBuild)
                 Toggle("Think harder by default", isOn: Binding(get: { thinkDefault }, set: { thinkDefault = $0; vm.thinkHarder = $0 }))
                 Section(header: Text("How it talks"), footer: Text("Your own instructions. They go to the model on every message and override its default manners. Think harder makes it reason step by step first (slower, better at logic).")) {
                     TextEditor(text: $styleText).frame(minHeight: 170).scrollContentBackground(.hidden)

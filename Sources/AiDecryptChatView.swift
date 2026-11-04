@@ -74,6 +74,8 @@ enum AiCard: Equatable {
     case reconResults([ReconResult])
     /// the colour wheel; the payload is the hex it is currently on
     case colorPicker(String)
+    /// a proposed code change for a reconstructed project: diff + Apply / Reject
+    case patch(jobID: String, patchID: String, name: String)
 }
 
 struct AppVersionPick: Identifiable, Equatable {
@@ -766,6 +768,9 @@ final class AiDecryptViewModel: ObservableObject {
             style += "You can send an animated GIF with the send_gif tool for reactions, celebrations and jokes, or when asked — sparingly, then add at most one short line. " +
                 "Chat entries written like \"[sent a GIF: …]\" are GIFs that were sent; never type that text yourself, call send_gif instead. "
         }
+        if let proj = latestReconProject {
+            style += "A reconstructed project (\(proj.name)) is open in this chat. When the person asks to add a feature, change, fix or rename something in its code, call edit_code with a full description. The app writes the change into the project files and shows the exact diff with a Revert button (if it needs approval it shows Apply and Reject instead, so only say it is written once the card says Applied). "
+        }
         style += "If the person wants to choose or fine-tune a colour themselves, or gives a hex code, call show_color_picker to open an interactive colour wheel in the chat."
         out.append(AiChatMessage(role: .system, content: style))
         if !summary.isEmpty {
@@ -885,6 +890,7 @@ final class AiDecryptViewModel: ObservableObject {
             messages.append(AiChatMessage(role: .assistant, content: ""))
             do {
                 var tools: [[String: Any]] = [AiImageGen.schema, AiRepoTools.searchAppsSchema, AiThemeTool.schema, AiColorIntent.schema] + (AiPrefs.gifs ? [AiGifTool.schema] : [])
+                if latestReconProject != nil { tools.append(AiCodeEdit.schema) }
                 if binaryAttachment != nil { tools += AiToolBridge.toolSchemas() }
 
                 beginCall()
@@ -952,6 +958,12 @@ final class AiDecryptViewModel: ObservableObject {
                             messages[assistantIndex].toolCalls = nil
                         }
                         return
+                    } else if call.name == AiCodeEdit.name {
+                        // Prepare a reviewed patch and show the diff card; nothing is written until the person taps Apply.
+                        let a = AiCodeEdit.args(call.arguments)
+                        let failure = await proposeCodeEdit(request: a.request, file: a.file, into: assistantIndex)
+                        if failure.isEmpty { return }
+                        messages.append(AiChatMessage(role: .tool, content: failure, toolCallId: call.id, name: call.name))
                     } else if call.name == AiGifTool.name {
                         let q = AiGifTool.extractQuery(call.arguments)
                         do {
@@ -1396,6 +1408,8 @@ struct AiDecryptChatView: View {
     @ViewBuilder
     private func cardView(_ card: AiCard, id: UUID) -> some View {
         switch card {
+        case .patch(let job, let pid, let name):
+            AiPatchCard(jobID: job, patchID: pid, name: name).id(pid)
         case .colorPicker(let hex):
             AiColorPickerCard(initialHex: hex) { applied in viewModel.setColorCard(messageID: id, hex: applied) }
         case .apps(let picks):

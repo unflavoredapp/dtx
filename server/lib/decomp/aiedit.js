@@ -42,6 +42,7 @@ function guardPatch(plan) {
 
 module.exports = function mountAiEdit(ctx) {
   const { app, express, B, guard, findPart, outRoot, audit, saveFile } = ctx;
+  const { spawn } = require('child_process');
   const env = ctx.env || process.env;
 
   const dirOf = (part) => path.join(outRoot, part.dir);
@@ -343,6 +344,7 @@ module.exports = function mountAiEdit(ctx) {
     const pp = loadPatches(part).slice(-12);
     if (pp.length) add('Patches made in this job so far', pp.map((p) => `[${p.status}] ${p.title} — ${[...new Set((p.edits || []).map((e) => e.path))].join(', ')}`).join('\n'), 1800);
     add('Correctness gate', readText(path.join(dir, 'Report/verification.md')), 4000);
+    add('Every unresolved hook / failing check, all at once (fix them together in ONE patch)', hookReport(dir), 5000);
     add('Hook graph', readText(path.join(dir, 'Report/hookgraph.md')), 3500);
     add('Analyzer disagreements', readText(path.join(dir, 'Report/agreement.md')), 2500);
     return out.join('\n\n');
@@ -359,11 +361,192 @@ module.exports = function mountAiEdit(ctx) {
     return out;
   }
 
+
+  // ================= 1. syntax pre-check: compile only the changed file(s) before a patch is ever offered =================
+  // clang -fsyntax-only on the file's text as it WOULD be after the patch, compared with its text now. Only errors the patch
+  // adds count (a reconstructed file may already have some), matched by message so shifted line numbers don't matter.
+  // Skipped silently when clang isn't installed, and for Logos .x/.xm files (they need the Logos preprocessor first).
+  function clangFlags(dir) {
+    const t = readText(path.join(dir, 'build.sh')) || '', out = [];
+    const toks = t.replace(/\\\n/g, ' ').split(/\s+/);
+    for (let i = 0; i < toks.length && out.length < 60; i++) {
+      let k = toks[i].replace(/^["']|["']$/g, '');
+      if (/^-(I|F)$/.test(k) && toks[i + 1]) { k += toks[++i].replace(/^["']|["']$/g, ''); }
+      if (/^-include$/.test(k) && toks[i + 1]) { out.push('-include', path.resolve(dir, toks[++i].replace(/^["']|["']$/g, ''))); continue; }
+      if (/\$/.test(k)) continue;
+      if (/^-(I|F)./.test(k)) { out.push(k.slice(0, 2) + path.resolve(dir, k.slice(2))); continue; }
+      if (/^-D[\w=.\-]+$/.test(k) || /^-std=[\w+]+$/.test(k) || k === '-fobjc-exceptions' || k === '-fno-objc-arc') out.push(k);
+    }
+    return out;
+  }
+  function clangErrors(dir, rel, text, lang) {
+    return new Promise((ok) => {
+      const sdk = ctx.findSdk ? (() => { try { return ctx.findSdk(); } catch { return null; } })() : null;
+      const args = ['-fsyntax-only', '-fno-objc-arc', '-fno-color-diagnostics', '-ferror-limit=30', '-x', lang,
+        ...(sdk ? ['-isysroot', sdk, '-target', 'arm64-apple-ios13.0'] : []), '-I', dir, '-I', path.join(dir, path.dirname(rel)), ...clangFlags(dir), '-'];
+      let p; try { p = spawn(env.CLANG || 'clang', args, { cwd: path.join(dir, path.dirname(rel)), stdio: ['pipe', 'pipe', 'pipe'] }); } catch { return ok(null); }
+      let buf = '', done = false; const end = (v) => { if (!done) { done = true; clearTimeout(t); ok(v); } };
+      const t = setTimeout(() => { try { p.kill('SIGKILL'); } catch {} end(null); }, 25000);
+      p.stdout.on('data', (d) => { buf += d; }); p.stderr.on('data', (d) => { buf += d; });
+      p.on('error', () => end(null));
+      p.on('close', () => end(buf.split('\n').filter((l) => /:\d+:\d+: (?:fatal )?error: /.test(l)).map((l) => l.replace(/^.*?:\d+:\d+: /, '').trim())));
+      p.stdin.on('error', () => {}); p.stdin.end(text);
+    });
+  }
+  async function syntaxCheck(part, edits) {
+    if (env.OPTIMIZE_SYNTAX_CHECK === '0') return null;
+    const pr = prepare(part, edits); if (!pr.ok) return null;
+    const dir = dirOf(part), fresh = [];
+    for (const f of pr.plan) {
+      const lang = /\.mm$/i.test(f.path) ? 'objective-c++' : /\.m$/i.test(f.path) ? 'objective-c' : /\.c$/i.test(f.path) ? 'c' : /\.(cc|cpp)$/i.test(f.path) ? 'c++' : null;
+      if (!lang) continue;
+      const after = await clangErrors(dir, f.path, f.neu, lang); if (after === null) return null;
+      if (!after.length) continue;
+      const before = (await clangErrors(dir, f.path, f.old, lang)) || [], had = new Map();
+      for (const e of before) had.set(e, (had.get(e) || 0) + 1);
+      for (const e of after) { const n = had.get(e) || 0; if (n > 0) had.set(e, n - 1); else fresh.push(f.path + ': ' + e); }
+    }
+    return { newErrors: fresh.slice(0, 8) };
+  }
+
+  // ================= 2. every unresolved hook at once: what the gate lists + where each symbol is defined / used =================
+  function srcFiles(dir) {
+    const out = [];
+    (function w(d, depth) {
+      if (out.length > 300 || depth > 5) return; let es = []; try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+      for (const e of es) {
+        if (e.name.startsWith('.') || /^(Report|Pseudo|obj)$/.test(e.name)) continue;
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) w(p, depth + 1); else if (/\.(m|mm|x|xm|h|c)$/i.test(e.name)) { try { if (fs.statSync(p).size < 400000) out.push(p); } catch {} }
+      }
+    })(dir, 0);
+    return out;
+  }
+  function hookReport(dir) {
+    const gate = readText(path.join(dir, 'Report/verification.md')) || '';
+    const lines = gate.split('\n').filter((l) => /unresolved|not installed|never installed|referenced but|undefined|not defined|missing/i.test(l)).slice(0, 60);
+    if (!lines.length) return '';
+    const toks = new Set(); for (const l of lines) for (const t of (l.match(/[A-Za-z_][A-Za-z0-9_]{7,}/g) || [])) toks.add(t);
+    const files = srcFiles(dir), where = new Map();
+    for (const f of files) {
+      const rel = path.relative(dir, f).split(path.sep).join('/'), ls = (readText(f) || '').split('\n');
+      ls.forEach((l, i) => {
+        for (const t of toks) {
+          if (!l.includes(t)) continue;
+          const w = where.get(t) || { def: [], ref: [] }; where.set(t, w);
+          const isDef = /^[A-Za-z_]/.test(l) && !/^(return|#|typedef|extern)/.test(l) && new RegExp('\\b' + t + '\\s*\\(').test(l) && !/;\s*$/.test(l);
+          (isDef ? w.def : w.ref).push(rel + ':' + (i + 1));
+        }
+      });
+    }
+    const rows = [];
+    for (const [t, w] of where) rows.push(`${t}: ${w.def.length ? 'defined at ' + w.def.slice(0, 3).join(', ') : 'NOT DEFINED in any source file'}${w.ref.length ? ' | referenced at ' + w.ref.slice(0, 5).join(', ') : ''}`);
+    return lines.join('\n') + (rows.length ? '\n\nWhere each symbol lives (a symbol with no definition is what must be written; one that is only referenced through method_setImplementation / swizzle needs its install call):\n' + rows.slice(0, 40).join('\n') : '');
+  }
+
+  // ================= 3. triage by the small worker models (fast), so the big model starts with the file + causes =================
+  const WORKERS = String(env.OPTIMIZE_WORKER_URLS != null ? env.OPTIMIZE_WORKER_URLS : [8090, 8091, 8092, 8093].map((p) => `http://127.0.0.1:${p}/v1/chat/completions`).join(','))
+    .split(',').map((x) => x.trim()).filter((x) => /^https?:/.test(x));
+  let workerI = 0;
+  async function workerChat(messages, maxTokens) {
+    if (!WORKERS.length || typeof fetch !== 'function') return null;
+    const url = WORKERS[workerI++ % WORKERS.length];
+    try {
+      const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(25000),
+        body: JSON.stringify({ model: 'AiDecryptWorker', messages, max_tokens: maxTokens || 300, temperature: 0.1, stream: false }) });
+      if (!r.ok) return null; const j = await r.json();
+      return (j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || null;
+    } catch { return null; }
+  }
+  async function triage(part) {
+    try {
+      const dir = dirOf(part), d = diag.parse(dir), lines = [];
+      for (const [f, arr] of Object.entries(d.files || {})) for (const x of arr.slice(0, 5)) lines.push(`${f}:${x.line}: ${x.sev}: ${x.msg}`);
+      const text = (lines.slice(0, 40).join('\n') + '\n' + hookReport(dir)).trim().slice(0, 5000);
+      if (!text) return null;
+      const out = await workerChat([
+        { role: 'system', content: 'You triage compiler and verification output for an Objective-C project. Reply with ONLY a JSON object: {"files":["relative/path.m"],"causes":["one short plain-English cause per distinct problem"]}. "files" must be paths that appear in the text, most important first. Max 4 files, max 6 causes.' },
+        { role: 'user', content: text }], 300);
+      const m = out && out.match(/\{[\s\S]*\}/); if (!m) return null;
+      const j = JSON.parse(m[0]);
+      const files = (Array.isArray(j.files) ? j.files : []).map((f) => { const r = resolve(part, String(f)); return r && r.norm; }).filter(Boolean).slice(0, 4);
+      const causes = (Array.isArray(j.causes) ? j.causes : []).map((c) => String(c).slice(0, 200)).slice(0, 6);
+      return files.length || causes.length ? { files, causes } : null;
+    } catch { return null; }
+  }
+
+  // ================= 6. startup + periodic self-test of the model endpoints (also GET /api/ai/health) =================
+  const health = { at: 0, main: null, workers: [] };
+  const brief = (t) => String(t || '').replace(/\s+/g, ' ').slice(0, 220);
+  async function probe(url, model, messages) {
+    const t0 = Date.now();
+    try {
+      const r = await postJson(url, { model, messages, max_tokens: 8, stream: false, temperature: 0, chat_template_kwargs: { enable_thinking: false } }, 40000);
+      return r.status >= 200 && r.status < 300 ? { ok: true, ms: Date.now() - t0 } : { ok: false, ms: Date.now() - t0, status: r.status, error: brief(r.text) };
+    } catch (e) { return { ok: false, ms: Date.now() - t0, error: brief(e && e.message) }; }
+  }
+  let testing = null;
+  function selfTest() {
+    if (testing) return testing;
+    testing = (async () => {
+      const out = { at: Date.now(), main: null, workers: [] };
+      const url = LLM.url();
+      if (!url) out.main = { ok: false, error: 'OPTIMIZE_LLM_URL is not set' };
+      else {
+        // the shape the app sends: one system message first, then alternating turns
+        out.main = await probe(url, LLM.model(), [{ role: 'system', content: 'Reply with ok.' }, { role: 'user', content: 'ping' }, { role: 'assistant', content: 'ok' }, { role: 'user', content: 'ping' }]);
+        // a second system message mid-chat: strict templates (Qwen) reject it with a 500; the app merges them so this is informational
+        const multi = await probe(url, LLM.model(), [{ role: 'system', content: 'Reply with ok.' }, { role: 'system', content: 'Be brief.' }, { role: 'user', content: 'ping' }]);
+        out.main.multiSystemOk = !!multi.ok;
+      }
+      for (const w of WORKERS) out.workers.push({ url: w.replace(/^https?:\/\//, '').replace(/\/.*$/, ''), ...(await probe(w, 'AiDecryptWorker', [{ role: 'user', content: 'ping' }])) });
+      Object.assign(health, out);
+      const bad = [out.main, ...out.workers].filter((x) => x && !x.ok);
+      if (bad.length) console.warn('[decomp:ai] self-test FAILED:', bad.map((x) => x.error || x.status).join(' | '));
+      else console.log('[decomp:ai] self-test ok — main ' + out.main.ms + 'ms, ' + out.workers.length + ' worker(s)' + (out.main.multiSystemOk === false ? ', strict chat template (one system message only)' : ''));
+    })().catch(() => {}).finally(() => { testing = null; });
+    return testing;
+  }
+  setTimeout(selfTest, 6000).unref(); setInterval(selfTest, 10 * 60 * 1000).unref();
+  app.get('/api/ai/health', async (req, res) => {
+    if (req.query.fresh || !health.at) await selfTest();
+    res.json({ at: health.at, main: health.main, workers: health.workers });
+  });
+
+  function guessFixFile(part) {
+    try {
+      const dir = dirOf(part), d = diag.parse(dir);
+      let best = null, n = 0;
+      for (const [f, arr] of Object.entries(d.files || {})) { const c = arr.filter((x) => x.sev === 'error').length; if (c > n) { n = c; best = f; } }
+      if (best) { const r = resolve(part, best); if (r && readText(r.full) != null) return r.norm; }
+      const gate = (readText(path.join(dir, 'Report/verification.md')) || '') + '\n' + (readText(path.join(dir, 'build-errors.txt')) || '');
+      const seen = {};
+      for (const m of gate.match(/[\w.\-\/]+\.(?:xm|mm|m|x|h)\b/g) || []) {
+        if (/^(Report|Pseudo|\.raw)\//.test(m) || seen[m]) continue; seen[m] = 1;
+        const r = resolve(part, m); if (r && readText(r.full) != null) return r.norm;
+      }
+    } catch { /* fall back to letting the model look at the whole project */ }
+    return null;
+  }
+
   async function modelReply(part, b, history, job) {
     if (!LLM.url()) return { reply: 'No model is connected on this server. Set OPTIMIZE_LLM_URL to an OpenAI-compatible endpoint (the same one Reconstruct Studio\'s Optimize assistant uses) and restart.' };
     stepTo(job, 'context', 'Reading the project');
-    const hint = { explain: 'Explain what this code most likely does and how reliable the reconstruction is. Do not propose a patch unless something is clearly broken.', fix: 'Fix the build errors listed in the diagnostics with the smallest correct patch.', improve: 'Improve readability only: meaningful names for param_N / local variables where the evidence supports them, no behaviour change. Keep every method and hook.' }[b.action] || '';
-    const sections = [], ctxText = gather(part, b, sections);
+    const hint = { explain: 'Explain what this code most likely does and how reliable the reconstruction is. Do not propose a patch unless something is clearly broken.', fix: 'Fix EVERY build error and correctness-gate failure listed above in ONE patch, with the smallest correct changes. You MUST decide which file to edit yourself from the diagnostics and the open file; never ask the person which file or what change to make. For an unresolved hook (a method_setImplementation / %hook that references a replacement that is never installed), write the missing installation or definition in the file that already declares it. Return a patch. Only if it truly cannot be done safely, set patch to null and name the ONE concrete blocker.', improve: 'Improve readability only: meaningful names for param_N / local variables where the evidence supports them, no behaviour change. Keep every method and hook.' }[b.action] || '';
+    // Fix / improve with no file open: pick the file ourselves (the one with the most compiler errors, else the file the
+    // correctness gate names) instead of making the model ask which file to edit.
+    if (!b.file && (b.action === 'fix' || b.action === 'improve')) { const g = guessFixFile(part); if (g) b = Object.assign({}, b, { file: g }); }
+    let tri = null;
+    if (b.action === 'fix') {
+      stepTo(job, 'triage', 'Triage by the helper models');
+      tri = await triage(part);
+      if (!b.file && tri && tri.files[0]) b = Object.assign({}, b, { file: tri.files[0] });
+      stepTo(job, 'triage', 'Triage by the helper models', tri ? tri.files.length + ' file(s), ' + tri.causes.length + ' cause(s)' : 'skipped');
+    }
+    const sections = [], ctxText0 = gather(part, b, sections);
+    const ctxText = tri && (tri.causes.length || tri.files.length)
+      ? '=== Triage notes (from a small fast helper model: use as hints and verify against the code) ===\n' + (tri.files.length ? 'Likely files: ' + tri.files.join(', ') + '\n' : '') + tri.causes.map((c) => '- ' + c).join('\n') + '\n\n' + ctxText0
+      : ctxText0;
     stepTo(job, 'context', 'Read the project', sections.length + ' section' + (sections.length === 1 ? '' : 's') + ' · ' + Math.round(ctxText.length / 1000) + 'k characters');
     if (job) job.sections = sections.map((s) => s.replace(/\s*\(.*$/, '').slice(0, 60));
     const base =[{ role: 'system', content: SYSTEM }, ...recallHistory(history),
@@ -376,6 +559,17 @@ module.exports = function mountAiEdit(ctx) {
       if (!j) { lastErr = 'the answer was not valid JSON'; if (job && attempt < 3) stepTo(job, 'retry', 'Answer was malformed — asking again'); messages = [...base, { role: 'assistant', content: r.text.slice(0, 3000) }, { role: 'user', content: 'That was not a single valid JSON object. Answer again with only the JSON object described in the instructions.' }]; continue; }
       const reply = String(j.reply || '').slice(0, 4000);
       if (!j.patch) return { reply: reply || 'I could not find a safe change to propose.', model: r.model };
+      stepTo(job, 'check', 'Compiling the changed files');
+      const syn = await syntaxCheck(part, j.patch.edits);
+      if (syn && syn.newErrors.length) {
+        lastErr = 'it would not compile: ' + syn.newErrors[0];
+        if (attempt < 3) {
+          stepTo(job, 'retry', 'Patch would not compile — asking again', syn.newErrors[0].slice(0, 120));
+          messages = [...base, { role: 'assistant', content: r.text.slice(0, 3000) }, { role: 'user', content: 'Compiling the changed file with clang shows this patch introduces new errors:\n' + syn.newErrors.join('\n') + '\nFix them and answer again with only the JSON object.' }];
+          continue;
+        }
+        return { reply: (reply ? reply + '\n\n' : '') + 'I could not produce a patch that compiles. The last attempt added:\n' + syn.newErrors.map((e) => '- `' + e + '`').join('\n') + '\nNothing was changed.', model: r.model };
+      }
       stepTo(job, 'check', 'Running safety checks on the patch');
       const pt = propose(part, { model: r.model, title: j.patch.title, summary: j.patch.summary, evidence: j.patch.evidence, inference: !!j.patch.inference, edits: j.patch.edits, attempt });
       if (pt.status === 'proposed') return { reply: (reply || 'Here is the proposed change.') + '\n\nNothing has been changed yet. Review the diff and press Apply.', patch: pt, model: r.model };

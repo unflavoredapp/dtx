@@ -39,6 +39,7 @@ struct AiSidebar: View {
     @State private var query = ""
     @State private var searching = false
     @State private var showSettings = false
+    @State private var showEdits = false
     @FocusState private var searchFocused: Bool
 
     private var filtered: [SavedConversation] {
@@ -82,6 +83,7 @@ struct AiSidebar: View {
                     action("square.and.pencil", "New chat") { vm.newChat(); onClose() }
                     action("paintpalette", "Colour wheel") { onColorWheel() }
                     action("face.smiling", "GIFs") { onGif() }
+                    if vm.latestReconProject != nil { action("plus.forwardslash.minus", "Code edits") { showEdits = true } }
 
                     if !pinned.isEmpty {
                         header("Pinned")
@@ -117,6 +119,9 @@ struct AiSidebar: View {
             }
             .padding(.horizontal, 18).padding(.bottom, 14).padding(.top, 20)
             .background(LinearGradient(colors: [Color.black.opacity(0), Color.black.opacity(0.85)], startPoint: .top, endPoint: .bottom))
+        }
+        .sheet(isPresented: $showEdits) {
+            if let proj = vm.latestReconProject { AiEditHistorySheet(jobID: proj.jobID, name: proj.name) }
         }
         .fullScreenCover(isPresented: $showSettings) {
             AiSettingsView(vm: vm, leaveTitle: leaveTitle, leaveIcon: leaveIcon, onLeave: onLeave)

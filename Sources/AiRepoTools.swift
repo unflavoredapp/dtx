@@ -181,4 +181,6 @@ enum ReconstructAPI {
     }
 
     static func dylibDownloadPath(jobID: String) -> String { "\(base)/jobs/\(jobID)/dylib" }
+    /// The whole project (sources + the latest built dylib) zipped fresh from the files on the server.
+    static func zipDownloadPath(jobID: String) -> String { "\(base)/jobs/\(jobID)/download?item=0&part=0" }
 }
