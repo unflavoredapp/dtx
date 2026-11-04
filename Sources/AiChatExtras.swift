@@ -241,8 +241,8 @@ struct GiphyGIF: Identifiable, Equatable, Hashable {
     let title: String
     /// animated, sized for chat bubbles
     let url: String
-    /// still frame for the picker grid
-    let still: String
+    /// small animated version for the picker grid
+    let thumb: String
     let width: Double
     let height: Double
 }
@@ -250,10 +250,22 @@ struct GiphyGIF: Identifiable, Equatable, Hashable {
 /// GIPHY search. The key can be overridden with UserDefaults "dtx.giphy.key" or an Info.plist "GIPHY_API_KEY";
 /// the fallback is GIPHY's shared public beta key (rate limited — put a real key in for production).
 enum GiphyAPI {
+    static let defaultsKey = "dtx.giphy.key"
+    /// Hardcoded fallback: paste a free key from developers.giphy.com here to ship GIFs for everyone.
+    private static let builtInKey = "A1p5JVITvSYcywjMMElGBHxjSDsNx2rr"
+
+    static var customKey: String {
+        UserDefaults.standard.string(forKey: defaultsKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+    static func saveKey(_ k: String) {
+        let t = k.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.isEmpty { UserDefaults.standard.removeObject(forKey: defaultsKey) } else { UserDefaults.standard.set(t, forKey: defaultsKey) }
+    }
     private static var key: String {
-        if let k = UserDefaults.standard.string(forKey: "dtx.giphy.key"), !k.isEmpty { return k }
+        if !customKey.isEmpty { return customKey }
         if let k = Bundle.main.object(forInfoDictionaryKey: "GIPHY_API_KEY") as? String, !k.isEmpty { return k }
-        return "dc6zaTOxFJmzC"
+        if !builtInKey.isEmpty { return builtInKey }
+        return "dc6zaTOxFJmzC"   // GIPHY's shared public beta key (often blocked)
     }
 
     static func search(_ query: String, limit: Int = 24) async throws -> [GiphyGIF] {
@@ -267,7 +279,7 @@ enum GiphyAPI {
         req.httpMethod = "GET"
         let (data, resp) = try await URLSession.shared.data(for: req)
         if let http = resp as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw ApiError.server("GIF search answered with error \(http.statusCode).", http.statusCode)
+            throw ApiError.server(http.statusCode == 403 || http.statusCode == 401 || http.statusCode == 429 ? "GIF key rejected (\(http.statusCode))." : "GIF search answered with error \(http.statusCode).", http.statusCode)
         }
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let list = root["data"] as? [[String: Any]] else { return [] }
@@ -276,11 +288,11 @@ enum GiphyAPI {
             func pick(_ names: [String]) -> [String: Any]? { names.compactMap { imgs[$0] as? [String: Any] }.first { ($0["url"] as? String)?.isEmpty == false } }
             guard let anim = pick(["fixed_height_downsampled", "fixed_height", "downsized"]),
                   let url = anim["url"] as? String else { return nil }
-            let still = (pick(["fixed_width_still", "fixed_height_still", "downsized_still"])?["url"] as? String) ?? url
+            let thumb = (pick(["fixed_width_small", "fixed_width_downsampled", "fixed_width"])?["url"] as? String) ?? url
             let w = Double((anim["width"] as? String) ?? "") ?? 200
             let h = Double((anim["height"] as? String) ?? "") ?? 200
             let title = ((g["title"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return GiphyGIF(id: id, title: title.isEmpty ? "GIF" : title, url: url, still: still, width: w, height: h)
+            return GiphyGIF(id: id, title: title.isEmpty ? "GIF" : title, url: url, thumb: thumb, width: w, height: h)
         }
     }
 }
@@ -327,20 +339,21 @@ enum AiGifTool {
 enum GIFDecoder {
     private static let cache = NSCache<NSString, UIImage>()
 
-    static func image(for urlString: String) async -> UIImage? {
-        if let hit = cache.object(forKey: urlString as NSString) { return hit }
+    static func image(for urlString: String, maxFrames: Int = 90) async -> UIImage? {
+        let ck = "\(urlString)#\(maxFrames)" as NSString
+        if let hit = cache.object(forKey: ck) { return hit }
         guard let url = URL(string: urlString),
               let (data, _) = try? await URLSession.shared.data(from: url) else { return nil }
-        let img = await Task.detached(priority: .utility) { decode(data) }.value
-        if let img { cache.setObject(img, forKey: urlString as NSString) }
+        let img = await Task.detached(priority: .utility) { decode(data, maxFrames: maxFrames) }.value
+        if let img { cache.setObject(img, forKey: ck) }
         return img
     }
 
-    static func decode(_ data: Data) -> UIImage? {
+    static func decode(_ data: Data, maxFrames: Int = 90) -> UIImage? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         let count = CGImageSourceGetCount(source)
         guard count > 1 else { return CGImageSourceCreateImageAtIndex(source, 0, nil).map { UIImage(cgImage: $0) } }
-        let step = max(1, count / 90)          // keep memory sane on very long GIFs
+        let step = max(1, count / max(1, maxFrames))          // keep memory sane on very long GIFs
         var frames: [UIImage] = []
         var total = 0.0
         var i = 0
@@ -408,7 +421,38 @@ struct RemoteGIF: View {
     }
 }
 
-/// Search sheet opened from the composer's + menu. Tapping a GIF sends it.
+/// One animated cell in the picker grid.
+private struct GIFCell: View {
+    let url: String
+    @State private var image: UIImage?
+    var body: some View {
+        Color.white.opacity(0.05)
+            .overlay(
+                Group {
+                    if let image { GIFFillView(image: image) }
+                }
+            )
+            .clipped()
+            .task(id: url) { image = await GIFDecoder.image(for: url, maxFrames: 40) }
+    }
+}
+
+private struct GIFFillView: UIViewRepresentable {
+    let image: UIImage
+    func makeUIView(context: Context) -> UIImageView {
+        let v = UIImageView()
+        v.contentMode = .scaleAspectFill
+        v.clipsToBounds = true
+        v.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        v.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        v.image = image
+        return v
+    }
+    func updateUIView(_ v: UIImageView, context: Context) { if v.image !== image { v.image = image } }
+}
+
+/// Telegram-style GIF panel opened from the composer's + menu: search bar, quick-reaction chips and a full-bleed,
+/// animated 3-column grid. Tapping a GIF sends it.
 struct AiGifPickerSheet: View {
     let onPick: (GiphyGIF) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -416,60 +460,109 @@ struct AiGifPickerSheet: View {
     @State private var results: [GiphyGIF] = []
     @State private var loading = false
     @State private var error: String?
+    @State private var needsKey = false
+    @State private var keyField = ""
     @State private var searchTask: Task<Void, Never>?
+    @FocusState private var focused: Bool
 
-    private let cols = [GridItem(.flexible(), spacing: 6), GridItem(.flexible(), spacing: 6)]
+    private let cols = Array(repeating: GridItem(.flexible(), spacing: 1), count: 3)
+    private let chips: [(String, String)] = [
+        ("❤️", "love"), ("👍", "thumbs up"), ("👎", "thumbs down"), ("🎉", "celebrate"), ("😂", "laughing"),
+        ("😮", "wow"), ("😢", "sad"), ("😡", "angry"), ("🤔", "thinking"), ("🔥", "fire"), ("👋", "hello"), ("🙄", "eye roll"),
+    ]
 
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                     TextField("Search GIFs", text: $query)
+                        .focused($focused)
                         .submitLabel(.search)
                         .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
                         .onSubmit { run(delay: 0) }
-                    if !query.isEmpty {
-                        Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
-                    }
                 }
-                .padding(.horizontal, 12).padding(.vertical, 10)
-                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.06)))
-                .padding(12)
-
-                if let error {
-                    Text(error).font(.caption).foregroundStyle(.orange).padding(.horizontal, 14)
-                }
-                ScrollView {
-                    if loading && results.isEmpty { ProgressView().padding(40) }
-                    LazyVGrid(columns: cols, spacing: 6) {
-                        ForEach(results) { g in
-                            Button { onPick(g); dismiss() } label: {
-                                AsyncImage(url: URL(string: g.still)) { phase in
-                                    switch phase {
-                                    case .success(let img): img.resizable().scaledToFill()
-                                    default: Color.white.opacity(0.06)
-                                    }
-                                }
-                                .frame(height: 120)
-                                .frame(maxWidth: .infinity)
-                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    Text("Powered by GIPHY").font(.caption2).foregroundStyle(.secondary).padding(16)
+                .padding(.horizontal, 14).padding(.vertical, 12)
+                .background(Capsule().fill(Color.white.opacity(0.08)))
+                Button {
+                    if query.isEmpty { dismiss() } else { query = "" }
+                } label: {
+                    Image(systemName: "xmark").font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .background(Circle().fill(Color.white.opacity(0.08)))
                 }
             }
-            .background(AppBackground())
-            .navigationTitle("GIFs")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
-            .onChange(of: query) { _ in run(delay: 450) }
-            .task { run(delay: 0) }
+            .padding(.horizontal, 12).padding(.top, 14).padding(.bottom, 8)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(chips, id: \.1) { chip in
+                        Button { query = chip.1; focused = false } label: {
+                            Text(chip.0).font(.system(size: 22))
+                                .frame(width: 44, height: 40)
+                                .background(Capsule().fill(query == chip.1 ? Color.dtAccent.opacity(0.3) : Color.white.opacity(0.06)))
+                        }
+                    }
+                }
+                .padding(.horizontal, 12)
+            }
+            .padding(.bottom, 8)
+
+            if needsKey { keyCard }
+            else if let error {
+                Text(error).font(.caption).foregroundStyle(.orange).padding(.horizontal, 14).padding(.bottom, 6)
+            }
+
+            ScrollView {
+                if loading && results.isEmpty { ProgressView().padding(40) }
+                LazyVGrid(columns: cols, spacing: 1) {
+                    ForEach(results) { g in
+                        Button { onPick(g); dismiss() } label: {
+                            GIFCell(url: g.thumb)
+                                .aspectRatio(1, contentMode: .fill)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                if !results.isEmpty { Text("Powered by GIPHY").font(.caption2).foregroundStyle(.secondary).padding(14) }
+            }
+            .scrollDismissesKeyboard(.immediately)
         }
+        .background(AppBackground())
         .tint(.dtAccent)
+        .onChange(of: query) { _ in run(delay: 400) }
+        .task { run(delay: 0) }
+    }
+
+    private var keyCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("GIFs need a free GIPHY key").font(.subheadline.weight(.semibold))
+            Text("Get one in a minute at developers.giphy.com (Create an App → API), paste it here once, and GIFs work everywhere in the app.")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                TextField("Paste API key", text: $keyField)
+                    .autocorrectionDisabled().textInputAutocapitalization(.never)
+                    .font(.system(size: 14, design: .monospaced))
+                    .padding(.horizontal, 12).padding(.vertical, 10)
+                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.08)))
+                Button {
+                    GiphyAPI.saveKey(keyField)
+                    needsKey = false; error = nil
+                    run(delay: 0)
+                } label: {
+                    Text("Save").font(.subheadline.weight(.bold)).foregroundStyle(Color.dtOnAccent)
+                        .padding(.horizontal, 16).padding(.vertical, 10)
+                        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.dtAccent))
+                }
+                .disabled(keyField.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            Link("Open developers.giphy.com", destination: URL(string: "https://developers.giphy.com/dashboard/")!)
+                .font(.caption.weight(.semibold))
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.white.opacity(0.05)))
+        .padding(.horizontal, 12).padding(.bottom, 8)
     }
 
     private func run(delay: Int) {
@@ -479,10 +572,13 @@ struct AiGifPickerSheet: View {
             guard !Task.isCancelled else { return }
             loading = true; error = nil
             do {
-                let r = try await GiphyAPI.search(query)
-                if !Task.isCancelled { results = r; if r.isEmpty { error = "No GIFs found." } }
+                let r = try await GiphyAPI.search(query, limit: 30)
+                if !Task.isCancelled { results = r; needsKey = false; if r.isEmpty { error = "No GIFs found." } }
             } catch {
-                if !Task.isCancelled { self.error = "Couldn't reach GIPHY. \(error.localizedDescription)" }
+                if !Task.isCancelled {
+                    if case ApiError.server(_, let code) = error, [401, 403, 429].contains(code) { needsKey = true; results = [] }
+                    else { self.error = "Couldn't reach GIPHY. \(error.localizedDescription)" }
+                }
             }
             loading = false
         }

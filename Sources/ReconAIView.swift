@@ -376,26 +376,14 @@ struct AIProgressCard: View {
 struct AIUsageBar: View {
     let usage: ReconstructAPI.AIUsage
 
-    private func barColor(_ f: Double) -> Color { f > 0.9 ? Color.red : f > 0.7 ? Color.orange : Color.dtAccent }
-
     var body: some View {
-        let ctx = usage.ctx ?? 0
-        let last = usage.lastPrompt ?? 0
-        let frac = ctx > 0 ? min(1.0, Double(last) / Double(ctx)) : 0
+        // Staff and admin have no cap, so there is no "left" to count down: the bar is full and the figure is ∞.
         HStack(spacing: 10) {
             Label("\(usage.src == "estimate" ? "≈ " : "")\(fmtTok(usage.used)) used", systemImage: "chart.bar.fill")
-            if ctx > 0 {
-                GeometryReader { g in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(Color.white.opacity(0.1))
-                        Capsule().fill(barColor(frac)).frame(width: max(3, g.size.width * CGFloat(frac)))
-                    }
-                }
+            Capsule()
+                .fill(LinearGradient(colors: [Color.dtAccent.opacity(0.75), Color.dtAccent.opacity(0.25)], startPoint: .leading, endPoint: .trailing))
                 .frame(height: 4)
-                Text("\(fmtTok(max(0, ctx - last))) of \(fmtTok(ctx)) left")
-            } else {
-                Spacer()
-            }
+            Text("∞ left").font(.caption.weight(.semibold))
         }
         .font(.caption.monospacedDigit())
         .foregroundStyle(.secondary)
