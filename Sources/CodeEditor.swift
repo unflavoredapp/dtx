@@ -611,6 +611,12 @@ final class CodeEditorController: ObservableObject {
         }
     }
 
+    func selectionInfo() -> (text: String, line: Int)? {
+        guard let tv = textView, tv.selectedRange.length > 0 else { return nil }
+        let ns: NSString = tv.textStorage.mutableString
+        return (ns.substring(with: tv.selectedRange), tv.lineNumber(at: tv.selectedRange.location))
+    }
+
     func prefillFromSelection() {
         guard let tv = textView else { return }
         let r = tv.selectedRange

@@ -145,8 +145,8 @@ struct ReconEditorView: View {
 }
 
 private enum EditorSheet: Identifiable {
-    case diff, problems, evidence
-    var id: Int { switch self { case .diff: return 0; case .problems: return 1; case .evidence: return 2 } }
+    case diff, problems, evidence, ai
+    var id: Int { switch self { case .diff: return 0; case .problems: return 1; case .evidence: return 2; case .ai: return 3 } }
 }
 
 /// One recovered source file in a real code editor (syntax highlighting, line numbers, find/replace, undo/redo,
@@ -173,6 +173,8 @@ struct ReconFileEditor: View {
     @State private var built = false
     @State private var diag: ReconstructAPI.Diagnostics?
     @State private var sheet: EditorSheet?
+    @State private var aiSymbol: String?
+    @State private var aiSelection: (text: String, line: Int)?
     @State private var showFind = false
     @State private var replaceText = ""
     @State private var showGoTo = false
@@ -226,7 +228,12 @@ struct ReconFileEditor: View {
             case .problems:
                 ReconProblemsView(path: path, diag: diag) { line in ctl.goTo(line: line) }
             case .evidence:
-                ReconEvidenceView(jobID: jobID, fileFilter: path) { rec in ctl.jump(toSymbol: rec.label) }
+                ReconEvidenceView(jobID: jobID, fileFilter: path, onOpen: { rec in ctl.jump(toSymbol: rec.label) },
+                                  onAsk: { rec in aiSymbol = rec.label; aiSelection = nil; sheet = .ai })
+            case .ai:
+                ReconAIView(jobID: jobID, file: path, symbol: aiSymbol, selection: aiSelection?.text, selectionLine: aiSelection?.line) { touched in
+                    if touched.contains(path) { Task { await reloadFromServer() } }
+                }
             }
         }
         .onChange(of: ctl.query) { _ in ctl.updateFind() }
@@ -258,6 +265,7 @@ struct ReconFileEditor: View {
                 Button { Task { await openDiff() } } label: { Label("Diff vs generated", systemImage: "plus.forwardslash.minus") }
                 Button { sheet = .problems } label: { Label("Problems (\(problemCount))", systemImage: "exclamationmark.triangle") }
                 Button { sheet = .evidence } label: { Label("Function evidence", systemImage: "gauge.with.dots.needle.67percent") }
+                Button { Task { await openAI() } } label: { Label("Ask Ai-Decrypt…", systemImage: "sparkles") }
                 Button { showGoTo = true } label: { Label("Go to line…", systemImage: "arrow.down.to.line") }
             } label: {
                 Image(systemName: errorCount > 0 ? "exclamationmark.circle.fill" : "ellipsis.circle")
@@ -412,6 +420,27 @@ struct ReconFileEditor: View {
         var m: [Int: Int] = [:]
         for it in d.items(for: path) { m[it.line] = max(m[it.line] ?? 0, it.sev == "error" ? 2 : 1) }
         ctl.setMarkers(m)
+    }
+
+    /// The assistant works on the saved file on the server, so save first and hand it whatever is selected.
+    private func openAI() async {
+        if dirty { guard await performSave() else { return } }
+        aiSymbol = nil
+        aiSelection = ctl.selectionInfo()
+        sheet = .ai
+    }
+
+    /// after an Ai-Decrypt patch was applied or reverted: load the new text into the editor (it is already saved server-side)
+    private func reloadFromServer() async {
+        guard let t = try? await ReconstructAPI.readFile(jobID: jobID, path: path) else { return }
+        ctl.replaceAllText(t)
+        dirty = false
+        built = false
+        initialText = t
+        if let b = try? await ReconstructAPI.original(jobID: jobID, path: path) { serverBaseline = b }
+        savedEdit = serverBaseline != nil && serverBaseline != t
+        status = "Updated by Ai-Decrypt."
+        await loadDiag()
     }
 
     private func openDiff() async {

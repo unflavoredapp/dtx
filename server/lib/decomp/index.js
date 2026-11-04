@@ -669,6 +669,22 @@ function mount(app, o) {
     } catch (e) { res.status(400).json({ error: e.message }); }
   });
 
+  // Write one generated file exactly like the editor's Save does (diff baseline, .raw twin dropped, "keep" copies refreshed).
+  // Used by the Ai-Decrypt patch Apply / Revert so an AI edit behaves like a hand edit. Throws on a bad path.
+  function saveFile(part, rel, text, req) {
+    const dir = path.join(outRoot, part.dir), fp = path.resolve(dir, String(rel || ''));
+    if (!rel || !fp.startsWith(path.resolve(dir) + path.sep)) throw new Error('bad path');
+    try { const ofp = origPath(part, path.relative(dir, fp)); if (ofp && !fs.existsSync(ofp) && fs.existsSync(fp)) { fs.mkdirSync(path.dirname(ofp), { recursive: true }); fs.copyFileSync(fp, ofp); } } catch { /* baseline is best-effort */ }
+    fs.mkdirSync(path.dirname(fp), { recursive: true });
+    fs.writeFileSync(fp, text);
+    try { fs.rmSync(path.join(dir, '.raw', String(rel)), { force: true }); } catch { /* no raw twin */ }
+    const r2 = ovrLib.safeRel(rel); let kept = false;
+    if (r2 && part.overrideKey) { try { kept = ovr.refresh(part.overrideKey, r2, String(text), actorOf(req)); } catch { /* store problem must not fail a save */ } }
+    return kept;
+  }
+  // Ai-Decrypt editing: chat -> reviewable patch -> Apply / Revert (see aiedit.js)
+  try { require('./aiedit')({ app, express, B, guard, findPart, outRoot, audit, saveFile, env: process.env }); } catch (e) { console.error('[decomp] ai edit routes not mounted:', e.message); }
+
   // ---- Editor extras: diff baseline, changed-file list, per-function evidence ----
   function origPath(part, rel) {
     const base = path.resolve(outRoot, '.orig', part.dir);

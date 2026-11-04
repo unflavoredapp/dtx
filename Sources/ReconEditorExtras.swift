@@ -276,6 +276,7 @@ struct ReconEvidenceView: View {
     let jobID: String
     let fileFilter: String?
     let onOpen: (ReconstructAPI.FuncRecord) -> Void
+    var onAsk: ((ReconstructAPI.FuncRecord) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
 
     @State private var recs: ReconstructAPI.Records?
@@ -349,6 +350,10 @@ struct ReconEvidenceView: View {
                                                     if let d = e.detail, !d.isEmpty { Text(d).font(.caption2).foregroundStyle(.secondary) }
                                                 }
                                             }
+                                        }
+                                        if let ask = onAsk {
+                                            Button { ask(f) } label: { Label("Ask Ai-Decrypt about this", systemImage: "sparkles") }
+                                                .font(.caption.bold())
                                         }
                                         if f.file != nil {
                                             Button { dismiss(); onOpen(f) } label: { Label("Open in editor", systemImage: "arrow.right.circle") }
