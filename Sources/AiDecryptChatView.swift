@@ -53,16 +53,22 @@ enum AiCard: Equatable {
     case reconResults([ReconResult])
 }
 
+struct AppVersionPick: Identifiable, Equatable {
+    var id: String { version }
+    let version: String
+    let ipaURL: String?
+}
+
 struct AppPick: Identifiable, Equatable {
-    let id: String          // AppEntry.id
+    let id: String          // bundle id (deduped)
     let name: String
     let developer: String
     let icon: URL?
     let bid: String
-    let version: String
     let repoName: String
     let storeID: String?    // filled from the repo entry's App Store id when available
-    let ipaURL: String?     // the current version's (already-decrypted repo) IPA, to read dylibs from
+    var versions: [AppVersionPick]   // newest first, merged across duplicate repo entries
+    var current: AppVersionPick? { versions.first }
 }
 
 struct LibPick: Identifiable, Equatable {
@@ -75,12 +81,11 @@ struct LibPick: Identifiable, Equatable {
 struct LibrariesCard: Equatable {
     let bid: String
     let appName: String
-    let version: String       // the saved set's version these libs came from
     let storeID: String?
-    let ipaURL: String?       // repo IPA to extract dylibs from when there's no newer build to decrypt
-    let items: [LibPick]
-    let hasUpdate: Bool
-    let storeVersion: String?
+    let versions: [AppVersionPick]   // for the version selector
+    let currentVersion: String       // the version these items were scanned from
+    let ipaURL: String?              // the scanned version's IPA (dylibs are extracted from here)
+    let items: [LibPick]             // the app's real bundled dylibs/frameworks, read from the IPA
 }
 
 struct AiAttachment: Identifiable, Equatable {
@@ -481,12 +486,28 @@ final class AiDecryptViewModel: ObservableObject {
 
         let cleaned = query.trimmingCharacters(in: CharacterSet.alphanumerics.inverted.union(.whitespaces)).trimmingCharacters(in: .whitespaces)
         let showAll = cleaned.count < 2   // "show all apps" / "." / empty → just list some
-        let matches = showAll ? Array(apps.prefix(12)) : Array(AppSearcher.filter(apps, cleaned.lowercased()).prefix(12))
-        let picks = matches.map { a in
-            AppPick(id: a.id, name: a.name, developer: a.developer, icon: a.icon, bid: a.bid,
-                    version: a.current?.version ?? "", repoName: a.repoName, storeID: Self.storeID(from: a),
-                    ipaURL: a.current?.url?.absoluteString)
+        let matches = showAll ? apps : AppSearcher.filter(apps, cleaned.lowercased())
+
+        // Collapse by bundle id (the repo lists the same app many times) and merge every version across those
+        // duplicate entries, newest first, so one app = one card with a real version list.
+        var byBid: [String: AppPick] = [:]
+        var order: [String] = []
+        for a in matches {
+            let vps = a.versions.map { AppVersionPick(version: $0.version, ipaURL: $0.url?.absoluteString) }
+            if byBid[a.bid] != nil {
+                for v in vps where !byBid[a.bid]!.versions.contains(where: { $0.version == v.version }) {
+                    byBid[a.bid]!.versions.append(v)
+                }
+            } else {
+                byBid[a.bid] = AppPick(id: a.bid, name: a.name, developer: a.developer, icon: a.icon, bid: a.bid,
+                                       repoName: a.repoName, storeID: Self.storeID(from: a), versions: vps)
+                order.append(a.bid)
+                if order.count >= 12 { break }
+            }
         }
+        var picks = order.compactMap { byBid[$0] }
+        for i in picks.indices { picks[i].versions.sort { compareVersions($0.version, $1.version) > 0 } }
+
         var msg = AiChatMessage(role: .assistant, content: picks.isEmpty
             ? "No apps in your library (\(apps.count) total) match “\(query).”"
             : (showAll ? "Showing \(picks.count) of \(apps.count) apps — tap one:" : "Tap the app you want:"))
@@ -494,35 +515,42 @@ final class AiDecryptViewModel: ObservableObject {
         messages.append(msg)
     }
 
-    /// Tapped an app → load its saved dylibs/frameworks and whether a newer App Store build exists, then show
-    /// the dylib picker card.
+    /// Tapped an app → stream its newest version's IPA and read the real frameworks/dylibs inside it.
     func tapApp(_ pick: AppPick) {
+        guard !isStreaming, let version = pick.current else { return }
+        scanVersion(bid: pick.bid, appName: pick.name, storeID: pick.storeID, versions: pick.versions, version: version)
+    }
+
+    /// Picked a different version in the libraries card → re-scan that version's IPA.
+    func changeVersion(_ card: LibrariesCard, to version: AppVersionPick) {
         guard !isStreaming else { return }
-        messages.append(AiChatMessage(role: .assistant, content: "Loading \(pick.name)'s libraries…"))
+        scanVersion(bid: card.bid, appName: card.appName, storeID: card.storeID, versions: card.versions, version: version)
+    }
+
+    /// Streams one version's IPA (range reads, no full download) and lists its bundled dylibs/frameworks via
+    /// the same IPAScanner the app page uses, then shows them as a pick-to-reconstruct card.
+    private func scanVersion(bid: String, appName: String, storeID: String?, versions: [AppVersionPick], version: AppVersionPick) {
+        messages.append(AiChatMessage(role: .assistant, content: "Streaming \(appName) v\(version.version) and reading its libraries…"))
         let index = messages.count - 1
         flowTask = Task {
+            guard let ipaString = version.ipaURL, let url = URL(string: ipaString), url.scheme == "https" else {
+                messages[index].content = "\(appName) v\(version.version) has no downloadable IPA to read."
+                return
+            }
             do {
-                async let setsCall = AiRepoTools.libraries(bid: pick.bid)
-                async let updateCall = try? AiRepoTools.updateInfo(bid: pick.bid)
-                let sets = try await setsCall
-                let update = await updateCall
-                guard let set = sets.first else {
-                    messages[index].content = "No saved dylibs or frameworks for \(pick.name) yet."
+                let scanned = try await IPAScanner.scan(url)
+                let items = scanned.map { LibPick(name: $0.name, type: $0.type, size: $0.size) }
+                guard !items.isEmpty else {
+                    messages[index].content = "\(appName) v\(version.version) has no frameworks or dylibs bundled inside it."
                     return
                 }
-                let items = set.items.map { LibPick(name: $0.name, type: $0.type, size: $0.size) }
-                let card = LibrariesCard(
-                    bid: pick.bid, appName: pick.name, version: set.version,
-                    storeID: pick.storeID ?? update?.storeID,
-                    ipaURL: pick.ipaURL,
-                    items: items,
-                    hasUpdate: update?.hasUpdate ?? false,
-                    storeVersion: update?.storeVersion
-                )
-                messages[index].content = "\(pick.name) — pick the libraries to decrypt & reconstruct:"
+                let card = LibrariesCard(bid: bid, appName: appName, storeID: storeID,
+                                         versions: versions, currentVersion: version.version,
+                                         ipaURL: ipaString, items: items)
+                messages[index].content = "\(appName) v\(version.version) — \(items.count) libraries inside. Pick which to reconstruct:"
                 messages[index].card = .libraries(card)
             } catch {
-                messages[index].content = "Couldn't load \(pick.name)'s libraries: \(error.localizedDescription)"
+                messages[index].content = "Couldn't read \(appName) v\(version.version): \(error.localizedDescription)"
             }
         }
     }
@@ -538,21 +566,13 @@ final class AiDecryptViewModel: ObservableObject {
         flowTask = Task {
             defer { isStreaming = false }
             do {
-                // 1. Which IPA do we read the dylibs from? A newer App Store build → decrypt it; otherwise the repo IPA.
-                var ipaString = card.ipaURL ?? ""
-                if let storeID = card.storeID, card.hasUpdate {
-                    messages[index].content = "Decrypting the latest build of \(card.appName)…"
-                    ipaString = try await AiRepoTools.decryptLatest(storeID: storeID, version: card.storeVersion) { [weak self] line in
-                        self?.messages[index].content = line
-                    }
-                }
-                guard let ipaURL = URL(string: ipaString), ipaURL.scheme == "https" else {
-                    messages[index].content = "No decrypted IPA available for \(card.appName) to pull libraries from."
+                guard let ipaString = card.ipaURL, let ipaURL = URL(string: ipaString), ipaURL.scheme == "https" else {
+                    messages[index].content = "No IPA available for \(card.appName) v\(card.currentVersion) to pull libraries from."
                     return
                 }
 
-                // 2. Open the IPA once, then extract + reconstruct each selected library.
-                messages[index].content = "Opening \(card.appName)'s package…"
+                // Open the (already-streamed) version IPA once, then extract + reconstruct each selected library.
+                messages[index].content = "Opening \(card.appName) v\(card.currentVersion)…"
                 let zip = try await RemoteZip.open(ipaURL)
                 var results: [ReconResult] = []
                 for lib in selected {
@@ -795,9 +815,11 @@ struct AiDecryptChatView: View {
         case .apps(let picks):
             AiAppsCard(picks: picks) { pick in viewModel.tapApp(pick) }
         case .libraries(let lib):
-            AiLibrariesCard(card: lib, isBusy: viewModel.isStreaming) { selected in
+            AiLibrariesCard(card: lib, isBusy: viewModel.isStreaming, onRun: { selected in
                 viewModel.decryptAndReconstruct(lib, selected: selected)
-            }
+            }, onVersionChange: { version in
+                viewModel.changeVersion(lib, to: version)
+            })
         case .reconResults(let results):
             AiReconResultsCard(results: results) { result in
                 Task {

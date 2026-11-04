@@ -20,8 +20,10 @@ struct AiAppsCard: View {
 
                         VStack(alignment: .leading, spacing: 1) {
                             Text(pick.name).font(.subheadline.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
-                            Text([pick.developer, pick.version.isEmpty ? "" : "v\(pick.version)", pick.repoName]
-                                .filter { !$0.isEmpty }.joined(separator: " · "))
+                            Text([pick.developer,
+                                  pick.current.map { "v\($0.version)" } ?? "",
+                                  pick.versions.count > 1 ? "\(pick.versions.count) versions" : "",
+                                  pick.repoName].filter { !$0.isEmpty }.joined(separator: " · "))
                                 .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                         }
                         Spacer(minLength: 0)
@@ -42,21 +44,32 @@ struct AiLibrariesCard: View {
     let card: LibrariesCard
     let isBusy: Bool
     let onRun: ([LibPick]) -> Void
+    let onVersionChange: (AppVersionPick) -> Void
 
     @State private var selected: Set<String> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if card.hasUpdate, let sv = card.storeVersion {
-                HStack(spacing: 6) {
-                    Image(systemName: "arrow.down.circle.fill").font(.caption)
-                    Text("New App Store build available: v\(sv). Decrypt pulls the latest.")
-                        .font(.caption2)
+            if card.versions.count > 1 {
+                Menu {
+                    ForEach(card.versions) { v in
+                        Button {
+                            if v.version != card.currentVersion { onVersionChange(v) }
+                        } label: {
+                            Label("v\(v.version)", systemImage: v.version == card.currentVersion ? "checkmark" : "")
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "clock.arrow.circlepath").font(.caption)
+                        Text("Version v\(card.currentVersion)").font(.caption2.weight(.medium))
+                        Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold))
+                    }
+                    .foregroundStyle(Color.dtAccent)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.dtAccent.opacity(0.12)))
                 }
-                .foregroundStyle(Color.dtAccent)
-                .padding(.horizontal, 10).padding(.vertical, 6)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.dtAccent.opacity(0.12)))
             }
 
             ForEach(card.items) { lib in
