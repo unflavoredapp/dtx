@@ -38,6 +38,7 @@ extension AiDecryptViewModel {
         for m in messages.reversed() {
             if case .reconResults(let rs)? = m.card, let r = rs.last(where: { !$0.jobID.isEmpty }) { return (r.jobID, r.dylibName) }
             if case .patch(let job, _, let name)? = m.card { return (job, name) }
+            if case .authored(let job, let name)? = m.card { return (job, name) }
         }
         return nil
     }

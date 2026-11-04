@@ -76,6 +76,20 @@ enum AiCard: Equatable {
     case colorPicker(String)
     /// a proposed code change for a reconstructed project: diff + Apply / Reject
     case patch(jobID: String, patchID: String, name: String)
+    /// the app's Live Update status, with Sync now / Update Center
+    case live
+    /// a drafted Live Update release: exact diff + Publish / Discard
+    case liveRelease(AiLiveRelease.Draft)
+    /// a drafted on-device tool (recipe): test run + Publish
+    case recipe(AiRecipeTool.Draft)
+    /// a drafted brand-new dylib: files + Create project
+    case dylibDraft(AiDylibTool.Draft)
+    /// a created AI-authored dylib project: Build / fix / share
+    case authored(jobID: String, name: String)
+    /// crash-log mapping: the project, the mapped frames, and the freshness check
+    case crash(String, String, [AiCrashTool.Match], AiCrashTool.CheckCrash?)
+    /// a proposed dylib plan: goal/files/frameworks/risks, nothing written until approved
+    case dylibPlan(AiDylibPlanTool.Plan)
 }
 
 struct AppVersionPick: Identifiable, Equatable {
@@ -697,6 +711,9 @@ final class AiDecryptViewModel: ObservableObject {
         let text = EmojiShortcodes.expand(draft.trimmingCharacters(in: .whitespacesAndNewlines))
         guard !text.isEmpty || !pendingAttachments.isEmpty || binaryAttachment != nil || pendingImage != nil, !isStreaming else { return }
 
+        // /help and /info are handled entirely here — no model round-trip, no tokens spent.
+        if pendingAttachments.isEmpty, binaryAttachment == nil, pendingImage == nil, handleSlashCommand(text) { return }
+
         // A hex code or "colour wheel" request opens the wheel right in the conversation, no model round-trip.
         if pendingAttachments.isEmpty, binaryAttachment == nil, pendingImage == nil, let hex = AiColorIntent.detect(text) {
             messages.append(AiChatMessage(role: .user, content: text))
@@ -771,6 +788,19 @@ final class AiDecryptViewModel: ObservableObject {
         if let proj = latestReconProject {
             style += "A reconstructed project (\(proj.name)) is open in this chat. When the person asks to add a feature, change, fix or rename something in its code, call edit_code with a full description. The app writes the change into the project files and shows the exact diff with a Revert button (if it needs approval it shows Apply and Reject instead, so only say it is written once the card says Applied). "
         }
+        style += "The app updates itself from signed releases from the server (Live Update: live configuration, plugins, recipes, native builds). For questions about updates, versions or sync call live_update. "
+        if AiLiveRelease.available {
+            style += "When the person asks for a NEW TOOL that inspects an IPA (list frameworks, show permissions, read a plist key), call propose_recipe: it writes an on-device recipe; they test it on an IPA and tap Publish, so never say it is live. "
+            style += "When the person asks you to change the app for everyone without a new build (accent colour, hide or reorder tools, a banner, flags) or to ADD OR CHANGE SCREENS (a new page in the sidebar, a quick-actions block on the empty new-chat screen, a settings or links page), call propose_live_release: it only DRAFTS a release; they review the exact diff and tap Publish, so never say it is published. "
+        }
+        if AiDylibTool.available {
+            style += "When the person asks for a NEW dylib or tweak and the request is more than a one-line, fully-specified change, call propose_dylib_plan FIRST (goal, files+purpose, frameworks, hook approach, risks) — it writes nothing and shows an Approve/Needs-changes card. Only call create_dylib after they approve (a message starting \"Approved.\") or they already gave exact files/behaviour and said to just write it directly. create_dylib takes complete Objective-C sources; they review the files, tap Create project, then Build. If their message is tagged like \"[template: method-hook]\", pass that same id as create_dylib's template field. Once a dylib project exists, edit_code changes it. "
+        }
+        if latestReconProject != nil {
+            style += "When the person pastes a crash log, a .ips file, or an address/offset from a crash, call debug_crash with that text exactly as pasted — it maps the frame to a recovered function and checks whether it's from the current build or a stale one. "
+        }
+        style += "You can never confirm a signing key, force an update or roll back; send the person to the Update Center for those. "
+        style += "If the person asks what commands exist or how to use you, tell them to type /help (a full list) or /info (app version, server, AI model) — both answer instantly without using you, so don't list commands yourself. "
         style += "If the person wants to choose or fine-tune a colour themselves, or gives a hex code, call show_color_picker to open an interactive colour wheel in the chat."
         out.append(AiChatMessage(role: .system, content: style))
         if !summary.isEmpty {
@@ -889,7 +919,11 @@ final class AiDecryptViewModel: ObservableObject {
             let assistantIndex = messages.count
             messages.append(AiChatMessage(role: .assistant, content: ""))
             do {
-                var tools: [[String: Any]] = [AiImageGen.schema, AiRepoTools.searchAppsSchema, AiThemeTool.schema, AiColorIntent.schema] + (AiPrefs.gifs ? [AiGifTool.schema] : [])
+                var tools: [[String: Any]] = [AiImageGen.schema, AiRepoTools.searchAppsSchema, AiThemeTool.schema, AiColorIntent.schema, AiLiveTool.schema] + (AiPrefs.gifs ? [AiGifTool.schema] : [])
+                if AiLiveRelease.available { tools.append(AiLiveRelease.schema); tools.append(AiRecipeTool.schema) }
+                if AiDylibTool.available { tools.append(AiDylibTool.schema) }
+                tools.append(AiCrashTool.schema)
+                if AiDylibTool.available { tools.append(AiDylibPlanTool.schema) }
                 if latestReconProject != nil { tools.append(AiCodeEdit.schema) }
                 if binaryAttachment != nil { tools += AiToolBridge.toolSchemas() }
 
@@ -958,6 +992,28 @@ final class AiDecryptViewModel: ObservableObject {
                             messages[assistantIndex].toolCalls = nil
                         }
                         return
+                    } else if call.name == AiDylibTool.name {
+                        let told = await proposeDylib(arguments: call.arguments, into: assistantIndex)
+                        messages.append(AiChatMessage(role: .tool, content: told, toolCallId: call.id, name: call.name))
+                    } else if call.name == AiCrashTool.name {
+                        let told = await proposeCrashDebug(arguments: call.arguments, into: assistantIndex)
+                        messages.append(AiChatMessage(role: .tool, content: told, toolCallId: call.id, name: call.name))
+                    } else if call.name == AiDylibPlanTool.name {
+                        let told = proposeDylibPlan(arguments: call.arguments, into: assistantIndex)
+                        messages.append(AiChatMessage(role: .tool, content: told, toolCallId: call.id, name: call.name))
+                    } else if call.name == AiRecipeTool.name {
+                        let told = await proposeRecipe(arguments: call.arguments, into: assistantIndex)
+                        messages.append(AiChatMessage(role: .tool, content: told, toolCallId: call.id, name: call.name))
+                    } else if call.name == AiLiveRelease.name {
+                        let told = await proposeLiveRelease(arguments: call.arguments, into: assistantIndex)
+                        messages.append(AiChatMessage(role: .tool, content: told, toolCallId: call.id, name: call.name))
+                    } else if call.name == AiLiveTool.name {
+                        let result = await AiLiveTool.run(arguments: call.arguments)
+                        if assistantIndex < messages.count {
+                            if messages[assistantIndex].content.hasPrefix("Running ") { messages[assistantIndex].content = "" }
+                            messages[assistantIndex].card = .live
+                        }
+                        messages.append(AiChatMessage(role: .tool, content: result + "\nThe person can see a live status card with Sync now and Update Center buttons; don't repeat every line, just answer what they asked.", toolCallId: call.id, name: call.name))
                     } else if call.name == AiCodeEdit.name {
                         // Prepare a reviewed patch and show the diff card; nothing is written until the person taps Apply.
                         let a = AiCodeEdit.args(call.arguments)
@@ -1200,6 +1256,7 @@ struct AiDecryptChatView: View {
     @EnvironmentObject private var store: RepoStore
     @Environment(\.dismiss) private var dismiss
     @FocusState private var inputFocused: Bool
+    @ObservedObject private var liveSync = LiveSync.shared
     @State private var showWebpageAlert = false
     @State private var webpageURL = ""
     @State private var photoItem: PhotosPickerItem?
@@ -1254,6 +1311,9 @@ struct AiDecryptChatView: View {
         .preferredColorScheme(.dark)
         .tint(.dtAccent)
         .onAppear { viewModel.store = store }
+        .onReceive(NotificationCenter.default.publisher(for: .liveAskAI)) { n in
+            if let t = n.object as? String, !viewModel.isStreaming { viewModel.draft = t; viewModel.send() }
+        }
         .alert("Attach webpage", isPresented: $showWebpageAlert) {
             TextField("https://example.com", text: $webpageURL)
                 .textInputAutocapitalization(.never)
@@ -1368,6 +1428,9 @@ struct AiDecryptChatView: View {
             ScrollView {
                 // plain VStack: LazyVStack re-estimates row heights while the last bubble grows, which made the list jitter and re-scroll in a loop
                 VStack(spacing: 10) {
+                    if viewModel.messages.isEmpty, let home = LiveHome.screen {
+                        LiveScreenBody(screen: home).padding(.top, 10)
+                    }
                     ForEach(viewModel.messages.filter { $0.role == .user || $0.role == .assistant }) { message in
                         VStack(alignment: .leading, spacing: 8) {
                             if !message.content.isEmpty || message.imageData != nil || message.gifURL != nil {
@@ -1408,6 +1471,20 @@ struct AiDecryptChatView: View {
     @ViewBuilder
     private func cardView(_ card: AiCard, id: UUID) -> some View {
         switch card {
+        case .live:
+            AiLiveCard()
+        case .recipe(let d):
+            AiRecipeCard(draft: d)
+        case .dylibDraft(let d):
+            AiDylibDraftCard(draft: d) { job in viewModel.setCard(messageID: id, .authored(jobID: job, name: d.name)) }
+        case .authored(let job, let name):
+            AiAuthoredCard(jobID: job, name: name).id(job)
+        case .crash(let job, let name, let matches, let check):
+            AiCrashCard(jobID: job, name: name, matches: matches, check: check)
+        case .dylibPlan(let plan):
+            AiDylibPlanCard(plan: plan)
+        case .liveRelease(let d):
+            AiLiveReleaseCard(draft: d)
         case .patch(let job, let pid, let name):
             AiPatchCard(jobID: job, patchID: pid, name: name).id(pid)
         case .colorPicker(let hex):
@@ -1467,6 +1544,13 @@ struct AiDecryptChatView: View {
                         .frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 4)
                 }
                 if !viewModel.pendingAttachments.isEmpty || viewModel.binaryAttachment != nil || viewModel.pendingImage != nil { attachmentChips }
+                if viewModel.messages.isEmpty, AiDylibTool.available {
+                    AiDylibTemplateRow { t in
+                        let seed = t.seedPrompt.isEmpty ? "I want a new dylib: " : t.seedPrompt
+                        viewModel.draft = t.id == "blank" ? seed : "\(seed) [template: \(t.id)]"
+                    }
+                    .padding(.bottom, 4)
+                }
                 // one bar: a slim usage strip on top, a grey divider, then the composer
                 VStack(spacing: 0) {
                     AIUsageBar(usage: shownUsage, compact: true)

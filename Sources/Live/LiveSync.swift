@@ -32,6 +32,7 @@ struct LiveConfig: Decodable {
     var auto: [String: Bool]?
     var banner: LiveBannerInfo?
     var experimental: [LiveExperiment]?
+    var screens: [LiveScreen]?
 }
 extension LiveConfig {
     /// Everything a release can set is checked here before it is used: sizes, characters and shapes. Anything odd is dropped, not repaired.
@@ -49,6 +50,7 @@ extension LiveConfig {
             c.banner = LiveBannerInfo(id: b.id, title: cut(b.title, 80), text: cut(b.text, 400), url: u)
         }
         c.experimental = experimental.map { Array($0.filter { ident($0.id, 40) && !$0.title.isEmpty }.prefix(10).map { LiveExperiment(id: $0.id, title: cut($0.title, 80), detail: $0.detail.map { cut($0, 200) }) }) }
+        c.screens = screens.map { Array($0.prefix(12).compactMap { $0.sanitized() }) }
         return c
     }
 }

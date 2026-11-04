@@ -19,6 +19,7 @@ struct ReconEditorView: View {
     @State private var showEvidence = false
     @State private var changed: Set<String> = []
     @State private var badFiles: [String: Int] = [:]   // path -> error count from the last build
+    @State private var showSymbols = false
 
     var body: some View {
         NavigationStack(path: $navPath) {
@@ -75,6 +76,8 @@ struct ReconEditorView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } }
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button { showSymbols = true } label: { Image(systemName: "magnifyingglass") }
+                        .disabled(loading)
                     Button { showEvidence = true } label: { Image(systemName: "gauge.with.dots.needle.67percent") }
                         .disabled(loading)
                     Button { rebuild() } label: {
@@ -86,6 +89,9 @@ struct ReconEditorView: View {
                 ReconEvidenceView(jobID: jobID, fileFilter: nil) { rec in
                     if let f = rec.file { jump = rec.label; navPath = [f] }
                 }
+            }
+            .sheet(isPresented: $showSymbols) {
+                AiSymbolSearchSheet(jobID: jobID) { file, line in jump = "#\(line)"; navPath = [file] }
             }
             .task { await load() }
             .onChange(of: navPath) { _ in Task { await refreshMeta() } }

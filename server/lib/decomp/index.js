@@ -208,6 +208,7 @@ function attachBodies(methods, data) {
 // ---------------------------------------------------------------------------------
 // Jobs + Express router
 // ---------------------------------------------------------------------------------
+const pmem = require('./project-memory');
 const jobs = new Map();
 const newId = () => crypto.randomBytes(6).toString('hex');
 const JOB_TTL = Number(process.env.DECOMP_JOB_TTL_H || 6) * 3600000;
@@ -383,6 +384,7 @@ function mount(app, o) {
     // MR_SKIP_INIT=1 turns every recovered __attribute__((constructor))/(destructor)) function into a no-op (see
     // Report/initializers.md / library.js) — surfaced here as a checkbox so testing it doesn't require a terminal.
     const skipInit = /^(1|true|on|yes)$/i.test(String(req.query.skipInit || ''));
+    const buildStarted = Date.now();
     // See engineFingerprint() above: Build only recompiles what the last recipe run wrote to disk, so if
     // library.js has changed since THIS part's recipe last ran, this build will not contain whatever that
     // change fixed — loudly, instead of silently, which is what let the autoreleasepool retype fix go unverified
@@ -410,6 +412,7 @@ function mount(app, o) {
     runBuild(dir, sdk, log, skipInit ? { MR_SKIP_INIT: '1' } : {})
       .then(() => {
         part.buildState = 'done'; snapshotBuild(dir, part, skipInit);
+        try { pmem.recordBuild(dir, { ok: true, durationMs: Date.now() - buildStarted, config: { sdk, skipInit, dylibName: part.dylibName } }); } catch { /* memory is best effort */ }
         // This is what a device's .ips calls usedImages[].uuid — logging it here, straight from the just-built
         // file (not from memory of what "should" have changed), is the one way to actually confirm a rebuild
         // produced new bytes: compare this value against the next crash log's uuid for this dylib. Identical ==
@@ -422,7 +425,12 @@ function mount(app, o) {
           if (R) R.audit({ ...who, action: 'build-result', target: part.dylibName, detail: `ok uuid ${uuid}` });
         } catch (e) { log(`could not read UUID of the built dylib: ${e.message}`); if (R) R.audit({ ...who, action: 'build-result', target: part.dylibName, detail: 'ok (uuid unreadable)' }); }
       })
-      .catch((e) => { part.buildState = 'error'; log(e.message); appendBuildErrors(); if (R) R.audit({ ...who, action: 'build-result', target: part.dylibName, detail: `failed: ${String(e.message).slice(0, 200)}` }); });
+      .catch((e) => {
+        part.buildState = 'error'; log(e.message); appendBuildErrors();
+        let nfail = 0; try { nfail = (fs.readFileSync(path.join(dir, 'build-report.txt'), 'utf8').match(/^FAILED/gm) || []).length; } catch { /* not written */ }
+        try { pmem.recordBuild(dir, { ok: false, nfail, durationMs: Date.now() - buildStarted, config: { sdk, skipInit, dylibName: part.dylibName }, error: e.message }); } catch { /* memory is best effort */ }
+        if (R) R.audit({ ...who, action: 'build-result', target: part.dylibName, detail: `failed: ${String(e.message).slice(0, 200)}` });
+      });
     res.status(202).json({ ok: true });
   });
 
@@ -700,6 +708,13 @@ function mount(app, o) {
     if (r2 && part.overrideKey) { try { kept = ovr.refresh(part.overrideKey, r2, String(text), actorOf(req)); } catch { /* store problem must not fail a save */ } }
     return kept;
   }
+  // brand-new dylibs written by Ai-Decrypt (see authored.js): scaffolded into a ready part, then built/edited like any other
+  try { require('./authored')({ app, guard, audit, jobs, newId, outRoot, B }); } catch (e) { console.error('[decomp] authored dylib routes not mounted:', e.message); }
+  // project-wide symbol index / references, and the dylib-starter catalog — both generic over any job's part.dir
+  try { require('./symbols')({ app, guard, findPart, outRoot, findSdk: () => tool.findSdk(o.dataDir), B }); } catch (e) { console.error('[decomp] symbol routes not mounted:', e.message); }
+  try { require('./dylib-templates')({ app, guard, B }); } catch (e) { console.error('[decomp] dylib template routes not mounted:', e.message); }
+  // Live Sync releases drafted by Ai-Decrypt, reviewed and published from the app (see liveadmin.js)
+  try { require('./liveadmin')({ app, express, guard, audit }); } catch (e) { console.error('[decomp] live admin routes not mounted:', e.message); }
   // Ai-Decrypt editing: chat -> reviewable patch -> Apply / Revert (see aiedit.js)
   try { require('./aiedit')({ app, express, B, guard, findPart, outRoot, audit, saveFile, findSdk: () => tool.findSdk(o.dataDir), env: process.env }); } catch (e) { console.error('[decomp] ai edit routes not mounted:', e.message); }
 

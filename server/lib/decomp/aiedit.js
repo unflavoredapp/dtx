@@ -42,6 +42,8 @@ function guardPatch(plan) {
 
 module.exports = function mountAiEdit(ctx) {
   const { app, express, B, guard, findPart, outRoot, audit, saveFile } = ctx;
+  const pmem = require('./project-memory');
+  const symbols = require('./symbols');
   const { spawn } = require('child_process');
   const env = ctx.env || process.env;
 
@@ -343,6 +345,16 @@ module.exports = function mountAiEdit(ctx) {
     }
     const pp = loadPatches(part).slice(-12);
     if (pp.length) add('Patches made in this job so far', pp.map((p) => `[${p.status}] ${p.title} — ${[...new Set((p.edits || []).map((e) => e.path))].join(', ')}`).join('\n'), 1800);
+    // survives beyond this one job/session (stored in manifest.json): the project's goal, recent decisions and
+    // recent build attempts, even after the project has been re-imported from a downloaded zip.
+    add('Project memory (persists across sessions)', pmem.summary(dir), 2500);
+    const symSdk = ctx.findSdk ? (() => { try { return ctx.findSdk(); } catch { return null; } })() : null;
+    // every class and its methods, every bare function — so a change to one file can account for how it's used
+    // elsewhere without the model having had to open every file itself first. AST-backed where clang/the SDK can
+    // parse the file, regex fallback otherwise (see symbols.js); either way it's cached and only re-parses files
+    // that changed since the last turn.
+    add('Project symbol index (every class/method/function in this project)', symbols.summaryFor(dir, 3000, { sdk: symSdk }), 3000);
+    if (file) add(`Cross-file dependencies of ${file.norm} (textual, not semantic — what else mentions symbols defined here, and vice versa)`, symbols.depsFor(dir, file.norm, { sdk: symSdk }), 1500);
     add('Correctness gate', readText(path.join(dir, 'Report/verification.md')), 4000);
     add('Every unresolved hook / failing check, all at once (fix them together in ONE patch)', hookReport(dir), 5000);
     add('Hook graph', readText(path.join(dir, 'Report/hookgraph.md')), 3500);
@@ -510,7 +522,7 @@ module.exports = function mountAiEdit(ctx) {
   setTimeout(selfTest, 6000).unref(); setInterval(selfTest, 10 * 60 * 1000).unref();
   app.get('/api/ai/health', async (req, res) => {
     if (req.query.fresh || !health.at) await selfTest();
-    res.json({ at: health.at, main: health.main, workers: health.workers });
+    res.json({ at: health.at, main: health.main, workers: health.workers, model: LLM.model(), modelDeep: LLM.modelDeep ? LLM.modelDeep() : null });
   });
 
   function guessFixFile(part) {
@@ -679,6 +691,7 @@ module.exports = function mountAiEdit(ctx) {
       for (const f of pr.plan) saveFile(part, f.path, f.neu, req);   // same path as the editor's own Save: diff baseline, .raw twin dropped, "keep" copies refreshed
       Object.assign(pt, { status: 'applied', appliedAt: Date.now(), afterHash }); savePatches(part, all);
       audit(req, 'ai-apply', `${part.dylibName}:${pt.files ? pt.files.join(',') : pr.plan.map((f) => f.path).join(',')}`, `job ${req.params.id} patch ${pt.id}`);
+      try { pmem.recordDecision(dirOf(part), { request: pt.title, summary: pt.summary, files: pr.plan.map((f) => f.path), patchID: pt.id }); } catch { /* memory is best effort */ }
       res.json({ patch: view(pt, true, part), message: 'Applied. Rebuild to check it; a build passing still does not mean the dylib behaves like the original.' });
     } catch (e) { res.status(500).json({ error: 'Could not write the files: ' + e.message }); }
   });

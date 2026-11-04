@@ -40,6 +40,8 @@ struct AiSidebar: View {
     @State private var searching = false
     @State private var showSettings = false
     @State private var showEdits = false
+    @ObservedObject private var live = LiveSync.shared
+    @State private var openScreen: LiveScreen?
     @FocusState private var searchFocused: Bool
 
     private var filtered: [SavedConversation] {
@@ -84,6 +86,9 @@ struct AiSidebar: View {
                     action("paintpalette", "Colour wheel") { onColorWheel() }
                     action("face.smiling", "GIFs") { onGif() }
                     if vm.latestReconProject != nil { action("plus.forwardslash.minus", "Code edits") { showEdits = true } }
+                    ForEach((live.config.screens ?? []).filter { ($0.show ?? ["sidebar"]).contains("sidebar") }) { s in
+                        action(s.icon ?? "square.grid.2x2", s.title) { openScreen = s }
+                    }
 
                     if !pinned.isEmpty {
                         header("Pinned")
@@ -100,6 +105,7 @@ struct AiSidebar: View {
                 .padding(.horizontal, 8)
             }
             .scrollDismissesKeyboard(.immediately)
+            .sheet(item: $openScreen) { LiveScreenSheet(screen: $0) }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .overlay(alignment: .bottom) {
