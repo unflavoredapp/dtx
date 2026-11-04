@@ -20,39 +20,98 @@ extension ReconstructAPI {
     }
     struct AIMsg: Decodable { let role: String; let text: String; let patch: String?; let err: Int? }
     struct AILLM: Decodable { let configured: Bool }
-    struct AIState: Decodable { let llm: AILLM; let patches: [AIPatch]; let chat: [AIMsg] }
+
+    /// Tokens used by this job's conversation, and the model's context window.
+    struct AIUsage: Decodable, Equatable {
+        var prompt: Int? = nil
+        var completion: Int? = nil
+        var lastPrompt: Int? = nil
+        var ctx: Int? = nil
+        var used: Int { (prompt ?? 0) + (completion ?? 0) }
+    }
+
+    struct AIState: Decodable { let llm: AILLM; let patches: [AIPatch]; let chat: [AIMsg]; let usage: AIUsage? }
     struct AIResult: Decodable { let reply: String; let patch: AIPatch? }
 
-    private struct AIStarted: Decodable { let job: String }
-    private struct AIJob: Decodable { let state: String; let seconds: Int?; let error: String?; let result: AIResult? }
+    struct AIStep: Decodable, Hashable { let key: String; let label: String; let detail: String?; let ms: Int; let active: Bool }
+    /// The code the server is about to send to the model.
+    struct AISnippet: Decodable, Equatable { let path: String; let start: Int; let kind: String; let text: String; let more: Int? }
+
+    struct AIProgress: Equatable {
+        var seconds = 0
+        var attempt = 1
+        var tokens = 0
+        var tps = 0.0
+        var model: String? = nil
+        var deep = false
+        var stalled = false
+        var sections: [String] = []
+        var partial = ""
+        var phase = ""
+        var steps: [AIStep] = []
+        var usage: AIUsage? = nil
+    }
+
+    struct AIStarted: Decodable { let job: String; let snippet: AISnippet?; let ctx: Int?; let usage: AIUsage? }
+
+    private struct AIJob: Decodable {
+        let state: String
+        let error: String?
+        let result: AIResult?
+        let seconds: Int?
+        let attempt: Int?
+        let model: String?
+        let deep: Bool?
+        let tokens: Int?
+        let tps: Double?
+        let stalled: Bool?
+        let sections: [String]?
+        let partial: String?
+        let phase: String?
+        let steps: [AIStep]?
+        let usage: AIUsage?
+
+        var progress: AIProgress {
+            AIProgress(seconds: seconds ?? 0, attempt: attempt ?? 1, tokens: tokens ?? 0, tps: tps ?? 0, model: model,
+                       deep: deep ?? false, stalled: stalled ?? false, sections: sections ?? [], partial: partial ?? "",
+                       phase: phase ?? "", steps: steps ?? [], usage: usage)
+        }
+    }
     private struct AIPatchReply: Decodable { let patch: AIPatch }
+    private struct AIAck: Decodable { let ok: Bool? }
 
     static func aiState(jobID: String) async throws -> AIState {
         try await Api.shared.get("\(base)/jobs/\(jobID)/ai")
     }
 
-    /// Starts a request and polls until the model has answered (a local model can take minutes).
+    /// Starts a request, hands back the code being sent, then follows the live progress until the model has answered.
     static func aiAsk(jobID: String, message: String, action: String, file: String?, symbol: String?,
-                      selection: String?, selectionLine: Int?, progress: @escaping (Int) -> Void) async throws -> AIResult {
+                      selection: String?, selectionLine: Int?,
+                      onStart: @escaping (AIStarted) -> Void, progress: @escaping (AIProgress) -> Void) async throws -> AIResult {
         var body: [String: Any] = ["message": message, "action": action]
         if let file { body["file"] = file }
         if let symbol { body["symbol"] = symbol }
         if let selection { body["selection"] = selection }
         if let selectionLine { body["selectionLine"] = selectionLine }
         let started: AIStarted = try await Api.shared.post("\(base)/jobs/\(jobID)/ai/chat", json: body)
+        await MainActor.run { onStart(started) }
         var misses = 0
         while true {
             try Task.checkCancellation()
-            try await Task.sleep(nanoseconds: 2_000_000_000)
+            try await Task.sleep(nanoseconds: 700_000_000)
             do {
                 let j: AIJob = try await Api.shared.get("\(base)/jobs/\(jobID)/ai/jobs/\(started.job)"); misses = 0
-                if j.state == "running" { await MainActor.run { progress(j.seconds ?? 0) }; continue }
+                if j.state == "running" { let p = j.progress; await MainActor.run { progress(p) }; continue }
                 if j.state == "error" { throw ApiError.server(j.error ?? "The request failed.", 0) }
                 if let r = j.result { return r }
                 throw ApiError.server("The assistant returned nothing.", 0)
             } catch let e as ApiError where e.status == 0 { throw e }
             catch { misses += 1; if misses > 30 { throw error } }
         }
+    }
+
+    static func aiCancel(jobID: String, job: String) async {
+        do { let _: AIAck = try await Api.shared.post("\(base)/jobs/\(jobID)/ai/jobs/\(job)/cancel") } catch {}
     }
 
     static func aiPatch(jobID: String, id: String) async throws -> AIPatch {
@@ -73,6 +132,274 @@ extension ReconstructAPI {
     }
 }
 
+// MARK: - Formatting helpers
+
+private func fmtMs(_ ms: Int) -> String {
+    let s = Double(ms) / 1000
+    if s < 10 { return String(format: "%.1fs", s) }
+    return fmtSec(Int(s))
+}
+private func fmtSec(_ s: Int) -> String { s < 60 ? "\(s)s" : "\(s / 60)m \(s % 60)s" }
+private func fmtTok(_ n: Int) -> String {
+    if n < 1000 { return "\(n)" }
+    if n < 100_000 { return String(format: "%.1fk", Double(n) / 1000) }
+    return String(format: "%.0fk", Double(n) / 1000)
+}
+
+// MARK: - Live processing pieces
+
+/// Four bars that move while the model is working.
+struct AIActivityBars: View {
+    var active = true
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 24.0, paused: !active)) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate
+            HStack(alignment: .center, spacing: 3) {
+                ForEach(0..<4, id: \.self) { i in
+                    Capsule()
+                        .fill(Color.dtAccent)
+                        .frame(width: 3, height: 5 + 13 * CGFloat(abs(sin(t * 3.2 + Double(i) * 0.9))))
+                }
+            }
+            .frame(height: 18)
+        }
+    }
+}
+
+/// Indeterminate sweep: shows "working", never a fake percentage.
+struct AIShimmerLine: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { ctx in
+            let p = CGFloat(ctx.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.6) / 1.6)
+            GeometryReader { g in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.08))
+                    Capsule()
+                        .fill(LinearGradient(colors: [Color.clear, Color.dtAccent, Color.clear], startPoint: .leading, endPoint: .trailing))
+                        .frame(width: g.size.width * 0.35)
+                        .offset(x: g.size.width * 1.35 * p - g.size.width * 0.35)
+                }
+                .clipShape(Capsule())
+            }
+        }
+        .frame(height: 3)
+    }
+}
+
+struct AIBlinkingCursor: View {
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.5)) { ctx in
+            Rectangle()
+                .fill(Color.dtAccent)
+                .frame(width: 7, height: 14)
+                .opacity(Int(ctx.date.timeIntervalSinceReferenceDate * 2) % 2 == 0 ? 1 : 0.15)
+        }
+    }
+}
+
+/// The code that is being sent to the model, shown the moment a request starts.
+struct AISnippetCard: View {
+    let snippet: ReconstructAPI.AISnippet
+
+    private var title: String {
+        switch snippet.kind {
+        case "selection": return "Your selection"
+        case "symbol": return "Function"
+        default: return "Start of file"
+        }
+    }
+
+    var body: some View {
+        let lang = CodeLanguage.detect(snippet.path)
+        let count = snippet.text.components(separatedBy: "\n").count
+        let nums = (0..<count).map { String(snippet.start + $0) }.joined(separator: "\n")
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Image(systemName: "paperplane.fill").font(.caption2)
+                Text("Context sent · \(title)").font(.caption2.weight(.semibold))
+                Spacer()
+                Text("\((snippet.path as NSString).lastPathComponent):\(snippet.start)")
+                    .font(.system(size: 10, design: .monospaced)).lineLimit(1)
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(Color.white.opacity(0.06))
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 10) {
+                    Text(nums)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(Color.white.opacity(0.3))
+                        .multilineTextAlignment(.trailing)
+                    Text(CodeHighlighter.attributed(snippet.text, language: lang))
+                }
+                .padding(10)
+                .fixedSize(horizontal: true, vertical: false)
+            }
+
+            if let m = snippet.more, m > 0 {
+                Text("+ \(m) more lines in the full context")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .padding(.horizontal, 10).padding(.bottom, 8)
+            }
+        }
+        .background(Color(white: 0.07))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.08)))
+    }
+}
+
+/// What the model is doing right now: timed steps, token speed, and the answer as it is written.
+struct AIProgressCard: View {
+    let progress: ReconstructAPI.AIProgress
+    let started: Date
+    let stopping: Bool
+    let onStop: () -> Void
+
+    private var title: String {
+        if stopping { return "Stopping…" }
+        if let a = progress.steps.last(where: { $0.active }) { return a.label }
+        return progress.steps.isEmpty ? "Starting…" : "Working…"
+    }
+
+    private var modelLine: String? {
+        guard let m = progress.model else { return nil }
+        return progress.deep ? "\(m) · deep model" : m
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            header
+            AIShimmerLine()
+            ForEach(Array(progress.steps.enumerated()), id: \.offset) { _, s in stepRow(s) }
+            meter
+            draft
+        }
+        .padding(12)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.dtAccent.opacity(0.25)))
+    }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            AIActivityBars(active: !stopping)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(.subheadline.weight(.semibold))
+                if let ml = modelLine { Text(ml).font(.caption2).foregroundStyle(.secondary) }
+            }
+            Spacer()
+            TimelineView(.periodic(from: started, by: 1)) { ctx in
+                Text(fmtSec(max(0, Int(ctx.date.timeIntervalSince(started)))))
+                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            }
+            Button(action: onStop) {
+                Text(stopping ? "…" : "Stop").font(.caption.bold())
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(Color.white.opacity(0.12), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(stopping)
+        }
+    }
+
+    private func stepRow(_ s: ReconstructAPI.AIStep) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Group {
+                if s.active {
+                    ProgressView().scaleEffect(0.65)
+                } else if s.key == "retry" {
+                    Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(Color.orange)
+                } else {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(Color.green.opacity(0.85))
+                }
+            }
+            .font(.system(size: 13))
+            .frame(width: 16, height: 16)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(s.label)
+                    .font(.caption.weight(s.active ? .semibold : .regular))
+                    .foregroundStyle(s.active ? Color.white : Color.secondary)
+                if let d = s.detail, !d.isEmpty {
+                    Text(d).font(.caption2).foregroundStyle(.secondary)
+                }
+                if s.key == "context", !s.active, !progress.sections.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 5) {
+                            ForEach(Array(progress.sections.enumerated()), id: \.offset) { _, name in
+                                Text(name).font(.system(size: 10)).lineLimit(1)
+                                    .padding(.horizontal, 7).padding(.vertical, 2)
+                                    .background(Color.white.opacity(0.08), in: Capsule())
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(minLength: 4)
+            Text(fmtMs(s.ms)).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder private var meter: some View {
+        if progress.tokens > 0 {
+            HStack(spacing: 12) {
+                Label("\(progress.tokens) tokens", systemImage: "number")
+                if progress.tps > 0 { Label(String(format: "%.1f tok/s", progress.tps), systemImage: "bolt.fill") }
+                if progress.attempt > 1 { Label("attempt \(progress.attempt)", systemImage: "arrow.clockwise") }
+            }
+            .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+        }
+        if progress.stalled {
+            Label("No output for a while. The model may be loading or busy.", systemImage: "hourglass")
+                .font(.caption2).foregroundStyle(Color.orange)
+        }
+    }
+
+    @ViewBuilder private var draft: some View {
+        if !progress.partial.isEmpty {
+            Divider().overlay(Color.white.opacity(0.1))
+            VStack(alignment: .leading, spacing: 6) {
+                Text("DRAFT").font(.system(size: 9, weight: .bold)).tracking(1).foregroundStyle(.secondary)
+                MarkdownView(progress.partial)
+                AIBlinkingCursor()
+            }
+        }
+    }
+}
+
+/// Tokens used in this conversation and how much of the model's context window is left.
+struct AIUsageBar: View {
+    let usage: ReconstructAPI.AIUsage
+
+    private func barColor(_ f: Double) -> Color { f > 0.9 ? Color.red : f > 0.7 ? Color.orange : Color.dtAccent }
+
+    var body: some View {
+        let ctx = usage.ctx ?? 0
+        let last = usage.lastPrompt ?? 0
+        let frac = ctx > 0 ? min(1.0, Double(last) / Double(ctx)) : 0
+        HStack(spacing: 10) {
+            Label("\(fmtTok(usage.used)) used", systemImage: "chart.bar.fill")
+            if ctx > 0 {
+                GeometryReader { g in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.white.opacity(0.1))
+                        Capsule().fill(barColor(frac)).frame(width: max(3, g.size.width * CGFloat(frac)))
+                    }
+                }
+                .frame(height: 4)
+                Text("\(fmtTok(max(0, ctx - last))) of \(fmtTok(ctx)) left")
+            } else {
+                Spacer()
+            }
+        }
+        .font(.caption2.monospacedDigit())
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 14).padding(.vertical, 6)
+        .background(Color(white: 0.08))
+    }
+}
+
 // MARK: - Chat sheet
 
 struct ReconAIView: View {
@@ -87,10 +414,13 @@ struct ReconAIView: View {
 
     private struct Bubble: Identifiable {
         let id = UUID()
-        let role: String
-        let text: String
-        var patchID: String?
+        let role: String                       // user | assistant | context
+        var text: String = ""
+        var patchID: String? = nil
         var isError = false
+        var snippet: ReconstructAPI.AISnippet? = nil
+        var meta: String? = nil
+        var retry: (text: String, action: String)? = nil
     }
 
     @State private var bubbles: [Bubble] = []
@@ -98,7 +428,11 @@ struct ReconAIView: View {
     @State private var configured = true
     @State private var input = ""
     @State private var busy = false
-    @State private var elapsed = 0
+    @State private var progress: ReconstructAPI.AIProgress?
+    @State private var runJob: String?
+    @State private var runStart = Date()
+    @State private var stopping = false
+    @State private var usage = ReconstructAPI.AIUsage()
     @State private var loadError: String?
     @State private var reviewing: ReconstructAPI.AIPatch?
     @FocusState private var focused: Bool
@@ -107,29 +441,8 @@ struct ReconAIView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 contextBar
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 12) {
-                            if let loadError { Text(loadError).font(.caption).foregroundStyle(.red) }
-                            if !configured {
-                                Text("No model is connected on the server yet (OPTIMIZE_LLM_URL). Explanations and patches need one.")
-                                    .font(.caption).foregroundStyle(.orange)
-                            }
-                            if bubbles.isEmpty && loadError == nil {
-                                Text("Ask about this \(symbol == nil ? "file" : "function"), or tap a shortcut. Changes are always shown as a diff first — nothing is written until you press Apply.")
-                                    .font(.callout).foregroundStyle(.secondary)
-                            }
-                            ForEach(bubbles) { b in bubble(b).id(b.id) }
-                            if busy {
-                                HStack(spacing: 8) { ProgressView(); Text("Thinking… \(elapsed)s").font(.caption).foregroundStyle(.secondary) }
-                                    .id("busy")
-                            }
-                        }
-                        .padding(14)
-                    }
-                    .onChange(of: bubbles.count) { _ in withAnimation { proxy.scrollTo(bubbles.last?.id, anchor: .bottom) } }
-                    .onChange(of: busy) { b in if b { withAnimation { proxy.scrollTo("busy", anchor: .bottom) } } }
-                }
+                transcript
+                AIUsageBar(usage: usage)
                 inputBar
             }
             .background(Color.black)
@@ -146,6 +459,44 @@ struct ReconAIView: View {
         }
         .preferredColorScheme(.dark)
         .tint(.dtAccent)
+    }
+
+    private var transcript: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    if let loadError { Text(loadError).font(.caption).foregroundStyle(Color.red) }
+                    if !configured {
+                        Text("No model is connected on the server yet (OPTIMIZE_LLM_URL). Explanations and patches need one.")
+                            .font(.caption).foregroundStyle(Color.orange)
+                    }
+                    if bubbles.isEmpty && loadError == nil { emptyState }
+                    ForEach(bubbles) { b in bubble(b).id(b.id) }
+                    if busy {
+                        AIProgressCard(progress: progress ?? ReconstructAPI.AIProgress(), started: runStart, stopping: stopping) { stop() }
+                            .id("busy")
+                    }
+                    Color.clear.frame(height: 1).id("end")
+                }
+                .padding(14)
+            }
+            .onChange(of: bubbles.count) { _ in withAnimation { proxy.scrollTo("end", anchor: .bottom) } }
+            .onChange(of: busy) { b in if b { withAnimation { proxy.scrollTo("end", anchor: .bottom) } } }
+            .onChange(of: progress?.partial.count ?? 0) { _ in proxy.scrollTo("end", anchor: .bottom) }
+            .onChange(of: progress?.steps.count ?? 0) { _ in withAnimation { proxy.scrollTo("end", anchor: .bottom) } }
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "sparkles").font(.system(size: 28)).foregroundStyle(Color.dtAccent)
+            Text("Ask about this \(symbol == nil ? "file" : "function")")
+                .font(.headline)
+            Text("Pick a shortcut or type a request. You'll see the exact code that gets sent, then the model's progress as it works. Changes always arrive as a diff. Nothing is written until you press Apply.")
+                .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 28).padding(.horizontal, 12)
     }
 
     private var contextBar: some View {
@@ -200,16 +551,48 @@ struct ReconAIView: View {
 
     @ViewBuilder private func bubble(_ b: Bubble) -> some View {
         if b.role == "user" {
-            HStack { Spacer(minLength: 40)
+            HStack {
+                Spacer(minLength: 40)
                 Text(b.text).font(.callout).padding(10)
-                    .background(Color.dtAccent.opacity(0.22), in: RoundedRectangle(cornerRadius: 14)) }
-        } else {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(b.text).font(.callout).foregroundStyle(b.isError ? Color.red : Color.white).textSelection(.enabled)
-                if let pid = b.patchID, let p = patches[pid] { patchCard(p) }
+                    .background(Color.dtAccent.opacity(0.22), in: RoundedRectangle(cornerRadius: 14))
+                    .textSelection(.enabled)
             }
-            .padding(10).frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+        } else if b.role == "context", let sn = b.snippet {
+            AISnippetCard(snippet: sn)
+        } else {
+            assistantBubble(b)
+        }
+    }
+
+    private func assistantBubble(_ b: Bubble) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 5) {
+                Image(systemName: b.isError ? "exclamationmark.triangle.fill" : "sparkle").font(.caption2)
+                Text(b.isError ? "Problem" : "Ai-Decrypt").font(.caption2.weight(.semibold))
+            }
+            .foregroundStyle(b.isError ? Color.red : Color.dtAccent)
+
+            if b.isError {
+                Text(b.text).font(.callout).foregroundStyle(Color.red).textSelection(.enabled)
+            } else {
+                MarkdownView(b.text)
+            }
+            if let pid = b.patchID, let p = patches[pid] { patchCard(p) }
+            if let r = b.retry, b.isError {
+                Button { retry(b, r) } label: {
+                    Label("Try again", systemImage: "arrow.clockwise").font(.caption.bold())
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(Color.white.opacity(0.12), in: Capsule())
+                }.disabled(busy)
+            }
+            if let m = b.meta {
+                Text(m).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+            }
+        }
+        .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+        .background(b.isError ? Color.red.opacity(0.08) : Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+        .contextMenu {
+            Button { UIPasteboard.general.string = b.text } label: { Label("Copy", systemImage: "doc.on.doc") }
         }
     }
 
@@ -221,18 +604,18 @@ struct ReconAIView: View {
                 Text(p.status.capitalized).font(.caption2.bold()).padding(.horizontal, 7).padding(.vertical, 2)
                     .background(statusColor(p.status).opacity(0.25), in: Capsule()).foregroundStyle(statusColor(p.status))
             }
-            if let s = p.summary, !s.isEmpty { Text(s).font(.caption).foregroundStyle(.secondary) }
+            if let s = p.summary, !s.isEmpty { Text(MarkdownView.inline(s)).font(.caption).foregroundStyle(.secondary) }
             if let f = p.files, !f.isEmpty {
                 Text(f.joined(separator: ", ")).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).lineLimit(2)
             }
             if p.inference == true {
                 Label("Includes the model's own judgement, not only what the evidence shows", systemImage: "exclamationmark.triangle")
-                    .font(.caption2).foregroundStyle(.orange)
+                    .font(.caption2).foregroundStyle(Color.orange)
             }
             if let ev = p.evidence, !ev.isEmpty {
                 ForEach(ev.prefix(4), id: \.self) { e in Text("• " + e).font(.caption2).foregroundStyle(.secondary) }
             }
-            if let why = p.blockReason, p.status == "blocked" { Text(why).font(.caption).foregroundStyle(.red) }
+            if let why = p.blockReason, p.status == "blocked" { Text(why).font(.caption).foregroundStyle(Color.red) }
             Button { Task { await openReview(p) } } label: {
                 Label(p.status == "proposed" ? "Review diff" : "View diff", systemImage: "plus.forwardslash.minus").font(.caption.bold())
             }
@@ -253,6 +636,7 @@ struct ReconAIView: View {
             configured = st.llm.configured
             for p in st.patches { patches[p.id] = p }
             bubbles = st.chat.map { Bubble(role: $0.role, text: $0.text, patchID: $0.patch, isError: $0.err != nil) }
+            if let u = st.usage { usage = u }
         } catch {
             loadError = "Couldn't reach the Ai-Decrypt service: \(error.localizedDescription)"
         }
@@ -263,21 +647,66 @@ struct ReconAIView: View {
         if let full = try? await ReconstructAPI.aiPatch(jobID: jobID, id: p.id) { patches[p.id] = full; reviewing = full }
     }
 
+    private func stop() {
+        guard let j = runJob, !stopping else { return }
+        stopping = true
+        Task { await ReconstructAPI.aiCancel(jobID: jobID, job: j) }
+    }
+
+    private func retry(_ b: Bubble, _ r: (text: String, action: String)) {
+        guard !busy, let idx = bubbles.firstIndex(where: { $0.id == b.id }) else { return }
+        bubbles.remove(at: idx)
+        if idx > 0, bubbles[idx - 1].role == "user" { bubbles.remove(at: idx - 1) }
+        send(r.text, action: r.action)
+    }
+
+    private func metaLine() -> String? {
+        let secs = Int(Date().timeIntervalSince(runStart))
+        var parts = [fmtSec(secs)]
+        if let p = progress {
+            if p.tokens > 0 { parts.append("\(p.tokens) tokens") }
+            if p.tps > 0 { parts.append(String(format: "%.1f tok/s", p.tps)) }
+            if p.attempt > 1 { parts.append("attempt \(p.attempt)") }
+        }
+        return parts.joined(separator: " · ")
+    }
+
     private func send(_ text: String, action: String) {
         guard !busy else { return }
         bubbles.append(Bubble(role: "user", text: text))
-        busy = true; elapsed = 0; focused = false
+        busy = true; progress = nil; runJob = nil; stopping = false; runStart = Date(); focused = false
         Task {
             do {
-                let r = try await ReconstructAPI.aiAsk(jobID: jobID, message: text, action: action, file: file, symbol: symbol,
-                                                       selection: selection, selectionLine: selectionLine) { s in elapsed = s }
+                let r = try await ReconstructAPI.aiAsk(
+                    jobID: jobID, message: text, action: action, file: file, symbol: symbol,
+                    selection: selection, selectionLine: selectionLine,
+                    onStart: { st in
+                        runJob = st.job
+                        if let sn = st.snippet { bubbles.append(Bubble(role: "context", snippet: sn)) }
+                        if let u = st.usage {
+                            var v = u
+                            v.ctx = (st.ctx ?? 0) > 0 ? st.ctx : usage.ctx
+                            usage = v
+                        }
+                    },
+                    progress: { p in
+                        progress = p
+                        if var u = p.usage {
+                            if (u.ctx ?? 0) == 0 { u.ctx = usage.ctx }
+                            usage = u
+                        }
+                    })
                 var b = Bubble(role: "assistant", text: r.reply)
+                b.meta = metaLine()
                 if let p = r.patch { patches[p.id] = p; b.patchID = p.id }
                 bubbles.append(b)
             } catch {
-                bubbles.append(Bubble(role: "assistant", text: error.localizedDescription, isError: true))
+                var b = Bubble(role: "assistant", text: error.localizedDescription, isError: true)
+                b.retry = (text: text, action: action)
+                bubbles.append(b)
             }
-            busy = false
+            busy = false; progress = nil; runJob = nil; stopping = false
+            if let st = try? await ReconstructAPI.aiState(jobID: jobID), let u = st.usage { usage = u }
         }
     }
 }
