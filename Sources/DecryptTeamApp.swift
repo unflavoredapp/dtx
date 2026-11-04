@@ -4,6 +4,7 @@ import SwiftUI
 struct DecryptTeamApp: App {
     @StateObject private var store = RepoStore()
     @StateObject private var session = Session()
+    @ObservedObject private var theme = UserTheme.shared
 
     var body: some Scene {
         WindowGroup {
@@ -22,6 +23,7 @@ struct RootView: View {
     @EnvironmentObject var session: Session
     @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var live = LiveSync.shared
+    @ObservedObject private var userTheme = UserTheme.shared
 
     var body: some View {
         Group {
@@ -30,7 +32,7 @@ struct RootView: View {
             } else if !session.allowed {
                 OnboardingView()
             } else {
-                mainTabs.id(live.themeRev)      // rebuilt only when a live release changes the accent colour
+                mainTabs
             }
         }
         .task { await session.refresh() }
@@ -57,6 +59,9 @@ struct RootView: View {
             screen(.settings) { SettingsView() }
             FloatingTabBar()
         }
+        // rebuilt when the accent changes (a live release, or the person asking Ai-Decrypt). The sheets below sit outside
+        // this identity so an open chat is not dismissed by its own colour change.
+        .id("\(live.themeRev).\(userTheme.rev)")
         .sheet(isPresented: $store.showQuickBuild) { QuickBuildView() }
         .sheet(isPresented: $store.showTools) { ToolsHubView() }
         .sheet(isPresented: $store.showAiDecrypt) { AiDecryptChatView().environmentObject(store) }

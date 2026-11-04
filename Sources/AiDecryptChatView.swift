@@ -46,6 +46,9 @@ struct AiChatMessage: Identifiable, Equatable {
     var card: AiCard? = nil
     /// "12s · 412 tokens · 17.8 tok/s", set once the reply has finished.
     var meta: String? = nil
+    /// An animated GIF shown in this message (sent by the person via the GIF picker, or by the model via `send_gif`).
+    var gifURL: String? = nil
+    var gifTitle: String? = nil
 }
 
 /// Progress signals from the model stream, used for the live indicator and the per-reply token footer.
@@ -69,6 +72,8 @@ enum AiCard: Equatable {
     case apps([AppPick])
     case libraries(LibrariesCard)
     case reconResults([ReconResult])
+    /// the colour wheel; the payload is the hex it is currently on
+    case colorPicker(String)
 }
 
 struct AppVersionPick: Identifiable, Equatable {
@@ -131,6 +136,8 @@ struct AiImageAttachment: Identifiable, Equatable {
 enum AiDecryptAPI {
     static let endpoint = URL(string: "https://ai.decrypt.team/v1/chat/completions")!
     static let model = "AiDecrypt"
+    /// The text model's context window (llama-server -c). Used for the "left" figure in the usage bar.
+    static let contextWindow = 32_768
 
     /// A second llama-server instance running a vision-capable model (Qwen2-VL or similar, loaded with
     /// --mmproj), proxied at its own path so the text model's endpoint above doesn't have to change.
@@ -234,7 +241,7 @@ enum AiDecryptAPI {
 
 // MARK: - Saved conversations
 
-struct SavedMessage: Codable { var role: String; var content: String; var meta: String? }
+struct SavedMessage: Codable { var role: String; var content: String; var meta: String?; var gif: String?; var gifTitle: String? }
 
 struct SavedConversation: Codable, Identifiable {
     var id = UUID()
@@ -248,6 +255,7 @@ struct SavedConversation: Codable, Identifiable {
     var prompt = 0
     var completion = 0
     var src: String? = nil
+    var lastPrompt: Int? = nil
 }
 
 enum ChatArchive {
@@ -279,7 +287,7 @@ final class AiDecryptViewModel: ObservableObject {
     @Published var isFetchingWebpage = false
     @Published var live = AiLiveStats()
     /// Tokens used in this chat (staff and admin have no cap, so this is only a running total).
-    @Published var usage = ReconstructAPI.AIUsage()
+    @Published var usage = ReconstructAPI.AIUsage(ctx: AiDecryptAPI.contextWindow)
     @Published var conversations: [SavedConversation] = []
     private(set) var currentID = UUID()
     private var summary = ""
@@ -295,32 +303,33 @@ final class AiDecryptViewModel: ObservableObject {
         messages = c.messages.compactMap { m in
             guard let r = AiChatMessage.Role(rawValue: m.role) else { return nil }
             var x = AiChatMessage(role: r, content: m.content)
-            x.meta = m.meta
+            x.meta = m.meta; x.gifURL = m.gif; x.gifTitle = m.gifTitle
             return x
         }
         summary = c.summary
         foldedUsers = c.foldedUsers
-        usage = ReconstructAPI.AIUsage(prompt: c.prompt, completion: c.completion, lastPrompt: nil, ctx: nil, src: c.src)
+        usage = ReconstructAPI.AIUsage(prompt: c.prompt, completion: c.completion, lastPrompt: c.lastPrompt, ctx: AiDecryptAPI.contextWindow, src: c.src)
         errorText = nil
     }
 
     private func blankChat() {
         messages = []; summary = ""; foldedUsers = 0
-        usage = ReconstructAPI.AIUsage(); currentID = UUID(); errorText = nil
+        usage = ReconstructAPI.AIUsage(ctx: AiDecryptAPI.contextWindow); currentID = UUID(); errorText = nil
         removeBinaryAttachment(); removeImage()
     }
 
     /// Writes this conversation (text turns only) to disk so it is still there next time.
     private func persist() {
         let saved = messages.compactMap { m -> SavedMessage? in
-            guard m.role == .user || m.role == .assistant, m.toolCalls == nil, m.card == nil,
-                  !m.content.isEmpty, m.content != "Generating…" else { return nil }
-            return SavedMessage(role: m.role.rawValue, content: m.content, meta: m.meta)
+            guard m.role == .user || m.role == .assistant, m.card == nil,
+                  m.toolCalls == nil || m.gifURL != nil,
+                  !m.content.isEmpty || m.gifURL != nil, m.content != "Generating…" else { return nil }
+            return SavedMessage(role: m.role.rawValue, content: m.content, meta: m.meta, gif: m.gifURL, gifTitle: m.gifTitle)
         }
         guard !saved.isEmpty else { return }
         var c = conversations.first(where: { $0.id == currentID }) ?? SavedConversation(id: currentID)
         c.messages = saved; c.updated = Date(); c.summary = summary; c.foldedUsers = foldedUsers
-        c.prompt = usage.prompt ?? 0; c.completion = usage.completion ?? 0; c.src = usage.src
+        c.prompt = usage.prompt ?? 0; c.completion = usage.completion ?? 0; c.src = usage.src; c.lastPrompt = usage.lastPrompt
         if let u = saved.first(where: { $0.role == "user" })?.content {
             let t = u.trimmingCharacters(in: .whitespacesAndNewlines)
             let line = t.hasPrefix("--- file:")
@@ -410,12 +419,12 @@ final class AiDecryptViewModel: ObservableObject {
     private var runStart = Date()
     private var runFirstToken: Date?
     private var runMsgStart = 0
-    private var runCounted = 0, runAPIComp = 0, runAPIPrompt = 0, runAPICalls = 0, runCalls = 0
+    private var runCounted = 0, runAPIComp = 0, runAPIPrompt = 0, runAPICalls = 0, runCalls = 0, runLastPrompt = 0
     private var lastLive = Date.distantPast
 
     private func beginRun() {
         runStart = Date(); runFirstToken = nil; runMsgStart = messages.count
-        runCounted = 0; runAPIComp = 0; runAPIPrompt = 0; runAPICalls = 0; runCalls = 0
+        runCounted = 0; runAPIComp = 0; runAPIPrompt = 0; runAPICalls = 0; runCalls = 0; runLastPrompt = 0
         live = AiLiveStats(startedAt: runStart)
     }
     private func beginCall() { runCalls += 1; live.phase = .reading }
@@ -427,7 +436,7 @@ final class AiDecryptViewModel: ObservableObject {
         case .reasoning: runCounted += 1; if runFirstToken == nil { runFirstToken = Date() }; live.phase = .reasoning
         case .content: runCounted += 1; if runFirstToken == nil { runFirstToken = Date() }; live.phase = .writing
         case .toolCall: live.phase = .toolCall
-        case .usage(let p, let c): runAPIPrompt += p; runAPIComp += c; runAPICalls += 1
+        case .usage(let p, let c): runAPIPrompt += p; runAPIComp += c; runAPICalls += 1; runLastPrompt = p
         }
         let now = Date()
         if now.timeIntervalSince(lastLive) > 0.15 {
@@ -452,6 +461,8 @@ final class AiDecryptViewModel: ObservableObject {
         usage.prompt = (usage.prompt ?? 0) + (exact ? runAPIPrompt : promptEst)
         usage.completion = (usage.completion ?? 0) + tok
         usage.src = (usage.src == "estimate" || !exact) ? "estimate" : "api"
+        usage.lastPrompt = exact ? runLastPrompt : promptEst
+        usage.ctx = AiDecryptAPI.contextWindow
         if let i = messages.lastIndex(where: { $0.role == .assistant && !$0.content.isEmpty }), i >= runMsgStart {
             messages[i].meta = parts.joined(separator: " · ")
         }
@@ -538,8 +549,19 @@ final class AiDecryptViewModel: ObservableObject {
     }
 
     func send() {
-        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = EmojiShortcodes.expand(draft.trimmingCharacters(in: .whitespacesAndNewlines))
         guard !text.isEmpty || !pendingAttachments.isEmpty || binaryAttachment != nil || pendingImage != nil, !isStreaming else { return }
+
+        // A hex code or "colour wheel" request opens the wheel right in the conversation, no model round-trip.
+        if pendingAttachments.isEmpty, binaryAttachment == nil, pendingImage == nil, let hex = AiColorIntent.detect(text) {
+            messages.append(AiChatMessage(role: .user, content: text))
+            var reply = AiChatMessage(role: .assistant, content: "Here's the colour wheel — drag to pick, fine-tune the hex, then tap Apply to recolour the whole app.")
+            reply.card = .colorPicker(hex)
+            messages.append(reply)
+            draft = ""; errorText = nil
+            persist()
+            return
+        }
 
         var fullText = text
         if !pendingAttachments.isEmpty {
@@ -561,6 +583,24 @@ final class AiDecryptViewModel: ObservableObject {
         streamTask = Task { await self.runTurn() }
     }
 
+    /// Sends a GIF picked from the GIF sheet as the person's message.
+    func sendGif(_ g: GiphyGIF) {
+        guard !isStreaming else { return }
+        var m = AiChatMessage(role: .user, content: "")
+        m.gifURL = g.url; m.gifTitle = g.title
+        messages.append(m)
+        errorText = nil
+        isStreaming = true
+        beginRun()
+        persist()
+        streamTask = Task { await self.runTurn() }
+    }
+
+    /// Remembers which colour the wheel card is on so it survives the app-wide rebuild after Apply.
+    func setColorCard(messageID: UUID, hex: String) {
+        if let i = messages.firstIndex(where: { $0.id == messageID }) { messages[i].card = .colorPicker(hex) }
+    }
+
     func cancel() { streamTask?.cancel(); flowTask?.cancel(); isStreaming = false }
 
     func newChat() { cancel(); persist(); blankChat() }
@@ -569,6 +609,12 @@ final class AiDecryptViewModel: ObservableObject {
     /// transcript on every request — never stored in `messages`, so it doesn't show up in the UI.
     private func apiMessages(upTo index: Int) -> [AiChatMessage] {
         var out: [AiChatMessage] = []
+        out.append(AiChatMessage(role: .system, content:
+            "Style: you can use emojis naturally when they fit the mood (not every line). You can send an animated GIF with the send_gif tool " +
+            "for reactions, celebrations and jokes, or when asked — sparingly, then add at most one short line. " +
+            "Chat entries written like \"[sent a GIF: …]\" are GIFs that were sent; never type that text yourself, call send_gif instead. " +
+            "If the person wants to choose or fine-tune a colour themselves, or gives a hex code, call show_color_picker to open an interactive colour wheel in the chat."
+        ))
         if !summary.isEmpty {
             out.append(AiChatMessage(role: .system, content: "Memory of the earlier part of this conversation (summarized):\n\(summary)"))
         }
@@ -586,10 +632,19 @@ final class AiDecryptViewModel: ObservableObject {
                 "re-create, or mock up an image, do NOT say you can't make images. Instead reply with exactly " +
                 "`[GENERATE]` followed by one detailed text-to-image prompt describing the desired result, then " +
                 "`[/GENERATE]`, and nothing else — the app turns that into an image built from the attached photo. " +
+                "If the person asks to change the app's colour or theme, reply with exactly `[THEME]` followed by a colour name or hex and then `[/THEME]`, and nothing else. " +
+                "If they want to pick a colour themselves or ask for a colour wheel, reply with exactly `[COLORWHEEL]` plus an optional hex and then `[/COLORWHEEL]`. " +
+                "To send an animated GIF reaction, you may put `[GIF]` plus a short search phrase and then `[/GIF]` after a short line of text. " +
                 "For any other request, just answer normally about the image."
             ))
         }
-        out += Array(messages[min(foldStartIndex(), index)..<index])
+        out += messages[min(foldStartIndex(), index)..<index].map { m -> AiChatMessage in
+            guard m.gifURL != nil, m.toolCalls == nil else { return m }
+            var c = m
+            let label = "[sent a GIF: \(m.gifTitle ?? "GIF")]"
+            c.content = m.content.isEmpty ? label : m.content + " " + label
+            return c
+        }
         return out
     }
 
@@ -624,7 +679,19 @@ final class AiDecryptViewModel: ObservableObject {
             ) { [weak self] delta in self?.appendThrottled(delta, at: assistantIndex) }
             flushNow(at: assistantIndex)
 
-            if let prompt = AiImageGen.extractGenerateDirective(messages[assistantIndex].content),
+            if let spec = AiThemeTool.extractDirective(messages[assistantIndex].content) {
+                messages[assistantIndex].content = AiThemeTool.apply(spec).message
+            } else if let wheel = AiColorIntent.extractDirective(messages[assistantIndex].content) {
+                messages[assistantIndex].content = wheel.rest.isEmpty ? "Here's the colour wheel — drag to pick, then tap Apply." : wheel.rest
+                messages[assistantIndex].card = .colorPicker(wheel.hex ?? UserTheme.shared.hex ?? "B6FF3C")
+            } else if let gif = AiGifTool.extractDirective(messages[assistantIndex].content) {
+                messages[assistantIndex].content = gif.rest
+                if let hit = try? await AiGifTool.find(gif.query) {
+                    messages[assistantIndex].gifURL = hit.url; messages[assistantIndex].gifTitle = hit.title
+                } else if gif.rest.isEmpty {
+                    messages[assistantIndex].content = "(I tried to send a GIF for “\(gif.query)”, but the GIF service didn't answer.)"
+                }
+            } else if let prompt = AiImageGen.extractGenerateDirective(messages[assistantIndex].content),
                let source = latestUserImage() {
                 messages[assistantIndex].content = "Generating…"
                 do {
@@ -649,7 +716,7 @@ final class AiDecryptViewModel: ObservableObject {
             let assistantIndex = messages.count
             messages.append(AiChatMessage(role: .assistant, content: ""))
             do {
-                var tools: [[String: Any]] = [AiImageGen.schema, AiRepoTools.searchAppsSchema]
+                var tools: [[String: Any]] = [AiImageGen.schema, AiRepoTools.searchAppsSchema, AiThemeTool.schema, AiGifTool.schema, AiColorIntent.schema]
                 if binaryAttachment != nil { tools += AiToolBridge.toolSchemas() }
 
                 beginCall()
@@ -689,6 +756,33 @@ final class AiDecryptViewModel: ObservableObject {
                         } catch {
                             messages.append(AiChatMessage(role: .tool, content: "Image generation failed: \(error.localizedDescription)", toolCallId: call.id, name: call.name))
                         }
+                    } else if call.name == AiColorIntent.toolName {
+                        // Like search_apps: show the wheel and end the turn; the person's taps drive the rest.
+                        if assistantIndex < messages.count {
+                            let c = messages[assistantIndex].content
+                            if c.isEmpty || c.hasPrefix("Running ") {
+                                messages[assistantIndex].content = "Here's the colour wheel — drag to pick, fine-tune the hex, then tap Apply."
+                            }
+                            messages[assistantIndex].card = .colorPicker(AiColorIntent.argHex(call.arguments) ?? UserTheme.shared.hex ?? "B6FF3C")
+                            messages[assistantIndex].toolCalls = nil
+                        }
+                        return
+                    } else if call.name == AiGifTool.name {
+                        let q = AiGifTool.extractQuery(call.arguments)
+                        do {
+                            if let hit = try await AiGifTool.find(q) {
+                                messages[assistantIndex].gifURL = hit.url; messages[assistantIndex].gifTitle = hit.title
+                                if messages[assistantIndex].content.hasPrefix("Running ") { messages[assistantIndex].content = "" }
+                                messages.append(AiChatMessage(role: .tool, content: "GIF sent and shown to the person: \(hit.title). Add at most one short line.", toolCallId: call.id, name: call.name))
+                            } else {
+                                messages.append(AiChatMessage(role: .tool, content: "No GIF found for \"\(q)\". Carry on in text.", toolCallId: call.id, name: call.name))
+                            }
+                        } catch {
+                            messages.append(AiChatMessage(role: .tool, content: "GIF search failed: \(error.localizedDescription). Carry on in text.", toolCallId: call.id, name: call.name))
+                        }
+                    } else if call.name == AiThemeTool.name {
+                        let result = AiThemeTool.run(arguments: call.arguments)
+                        messages.append(AiChatMessage(role: .tool, content: result, toolCallId: call.id, name: call.name))
                     } else if let bin = binaryAttachment, let tool = AiToolBridge.tool(named: call.name) {
                         let resultText = await AiToolBridge.run(tool, fileURL: bin.fileURL)
                         messages.append(AiChatMessage(role: .tool, content: resultText, toolCallId: call.id, name: call.name))
@@ -900,6 +994,8 @@ struct AiDecryptChatView: View {
     @State private var photoItem: PhotosPickerItem?
     @State private var showPhotoPicker = false
     @State private var showHistory = false
+    @State private var showGifPicker = false
+    @ObservedObject private var theme = UserTheme.shared
 
     var body: some View {
         NavigationStack {
@@ -917,6 +1013,7 @@ struct AiDecryptChatView: View {
                     .sheet(isPresented: $showHistory) { AiHistorySheet(vm: viewModel) }
                 if !viewModel.pendingAttachments.isEmpty || viewModel.binaryAttachment != nil || viewModel.pendingImage != nil { attachmentChips }
                 composer
+                    .sheet(isPresented: $showGifPicker) { AiGifPickerSheet { viewModel.sendGif($0) } }
             }
             .background(AppBackground())
             .navigationBarTitleDisplayMode(.inline)
@@ -932,7 +1029,9 @@ struct AiDecryptChatView: View {
                 }
             }
         }
+        .id(theme.rev)      // recolours the open chat without losing the conversation (the view model lives outside this id)
         .preferredColorScheme(.dark)
+        .tint(.dtAccent)
         .onAppear { viewModel.store = store }
         .alert("Attach webpage", isPresented: $showWebpageAlert) {
             TextField("https://example.com", text: $webpageURL)
@@ -1047,10 +1146,10 @@ struct AiDecryptChatView: View {
                 LazyVStack(spacing: 10) {
                     ForEach(viewModel.messages.filter { $0.role == .user || $0.role == .assistant }) { message in
                         VStack(alignment: .leading, spacing: 8) {
-                            if !message.content.isEmpty || message.imageData != nil {
+                            if !message.content.isEmpty || message.imageData != nil || message.gifURL != nil {
                                 AiMessageBubble(message: message).equatable()
                             }
-                            if let card = message.card { cardView(card) }
+                            if let card = message.card { cardView(card, id: message.id) }
                         }
                         .id(message.id)
                     }
@@ -1068,8 +1167,10 @@ struct AiDecryptChatView: View {
     }
 
     @ViewBuilder
-    private func cardView(_ card: AiCard) -> some View {
+    private func cardView(_ card: AiCard, id: UUID) -> some View {
         switch card {
+        case .colorPicker(let hex):
+            AiColorPickerCard(initialHex: hex) { applied in viewModel.setColorCard(messageID: id, hex: applied) }
         case .apps(let picks):
             AiAppsCard(picks: picks) { pick in viewModel.tapApp(pick) }
         case .libraries(let lib):
@@ -1103,6 +1204,7 @@ struct AiDecryptChatView: View {
                 Button { pickFiles() } label: { Label("Upload files", systemImage: "paperclip") }
                 Button { showPhotoPicker = true } label: { Label("Attach photo", systemImage: "photo") }
                 Button { showWebpageAlert = true } label: { Label("Attach webpage", systemImage: "globe") }
+                Button { showGifPicker = true } label: { Label("Send a GIF", systemImage: "face.smiling") }
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 15, weight: .semibold))
@@ -1124,7 +1226,7 @@ struct AiDecryptChatView: View {
             } label: {
                 Image(systemName: viewModel.isStreaming ? "stop.fill" : "arrow.up")
                     .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(.black)
+                    .foregroundStyle(Color.dtOnAccent)
                     .frame(width: 30, height: 30)
                     .background(Circle().fill(Color.dtAccent))
             }
@@ -1220,8 +1322,7 @@ private struct AiLiveStrip: View {
             }
         }
         .padding(12)
-        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.dtAccent.opacity(0.25)))
+        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }
 
@@ -1240,8 +1341,9 @@ private struct AiMessageBubble: View, Equatable {
                         .frame(maxWidth: 220, maxHeight: 220)
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
+                if let g = message.gifURL { RemoteGIF(url: g) }
                 if message.role == .assistant {
-                    if !message.content.isEmpty { MarkdownView(message.content) }
+                    if !message.content.isEmpty { MarkdownView(EmojiShortcodes.expand(message.content)) }
                     if let m = message.meta {
                         Text(m).font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                     }
@@ -1259,11 +1361,7 @@ private struct AiMessageBubble: View, Equatable {
             .padding(.horizontal, 12).padding(.vertical, 8)
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(message.role == .user ? Color.dtAccent.opacity(0.14) : Color.white.opacity(0.065))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(message.role == .user ? Color.dtAccent.opacity(0.4) : Color.white.opacity(0.1))
+                    .fill(message.role == .user ? Color.dtAccent.opacity(0.16) : Color.white.opacity(0.045))
             )
             if message.role == .assistant { Spacer(minLength: 32) }
         }
@@ -1317,7 +1415,6 @@ private struct AiCodeBlockView: View {
         }
         .background(Color.black.opacity(0.4))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Color.dtLine))
     }
 }
 

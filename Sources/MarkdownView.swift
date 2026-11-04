@@ -351,7 +351,7 @@ struct MarkdownCodeBlock: View {
                 .foregroundStyle(copied ? Color.green : Color.secondary)
             }
             .padding(.horizontal, 10).padding(.vertical, 6)
-            .background(Color.white.opacity(0.06))
+            .background(Color.white.opacity(0.04))
 
             ScrollView(.horizontal, showsIndicators: false) {
                 Text(isDiff ? CodeHighlighter.diff(code) : CodeHighlighter.attributed(code, language: language))
@@ -359,9 +359,8 @@ struct MarkdownCodeBlock: View {
                     .padding(10)
             }
         }
-        .background(Color(white: 0.07))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.08)))
+        .background(Color.black.opacity(0.28))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }
 
@@ -388,8 +387,7 @@ struct MarkdownTable: View {
             }
             .padding(10)
         }
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.white.opacity(0.08)))
+        .background(Color.black.opacity(0.22), in: RoundedRectangle(cornerRadius: 12))
     }
 }
 

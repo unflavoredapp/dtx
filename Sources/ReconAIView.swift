@@ -228,7 +228,7 @@ struct AISnippetCard: View {
             }
             .foregroundStyle(.secondary)
             .padding(.horizontal, 10).padding(.vertical, 6)
-            .background(Color.white.opacity(0.06))
+            .background(Color.white.opacity(0.04))
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: 10) {
@@ -248,9 +248,8 @@ struct AISnippetCard: View {
                     .padding(.horizontal, 10).padding(.bottom, 8)
             }
         }
-        .background(Color(white: 0.07))
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.08)))
+        .background(Color.black.opacity(0.28))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
     }
 }
 
@@ -281,8 +280,7 @@ struct AIProgressCard: View {
             draft
         }
         .padding(12)
-        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.dtAccent.opacity(0.25)))
+        .background(Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 16))
     }
 
     private var header: some View {
@@ -373,32 +371,35 @@ struct AIProgressCard: View {
     }
 }
 
-/// Tokens used in this conversation. Staff and admin have no caps, so there is no "left" figure; the only warning is
-/// when the conversation is close to filling the model's context window (then older turns stop being read).
+/// Tokens used in this conversation and how much of the model's context window is still free.
+/// (Staff and admin have no caps: the bar is the model's own window, not a quota.)
 struct AIUsageBar: View {
     let usage: ReconstructAPI.AIUsage
 
+    private func barColor(_ f: Double) -> Color { f > 0.9 ? Color.red : f > 0.7 ? Color.orange : Color.dtAccent }
+
     var body: some View {
         let ctx = usage.ctx ?? 0
-        let frac = ctx > 0 ? Double(usage.lastPrompt ?? 0) / Double(ctx) : 0
-        HStack(spacing: 8) {
-            Label("\(usage.src == "estimate" ? "≈ " : "")\(fmtTok(usage.used)) tokens used", systemImage: "chart.bar.fill")
-            if let s = usage.src, !s.isEmpty {
-                Text(s == "estimate" ? "est." : "exact")
-                    .font(.system(size: 9, weight: .bold))
-                    .padding(.horizontal, 5).padding(.vertical, 1)
-                    .background((s == "estimate" ? Color.orange : Color.green).opacity(0.2), in: Capsule())
-                    .foregroundStyle(s == "estimate" ? Color.orange : Color.green)
-            }
-            Spacer()
-            if frac >= 0.85 {
-                Label("context \(Int(min(frac, 1) * 100))% full", systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(Color.orange)
+        let last = usage.lastPrompt ?? 0
+        let frac = ctx > 0 ? min(1.0, Double(last) / Double(ctx)) : 0
+        HStack(spacing: 10) {
+            Label("\(usage.src == "estimate" ? "≈ " : "")\(fmtTok(usage.used)) used", systemImage: "chart.bar.fill")
+            if ctx > 0 {
+                GeometryReader { g in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.white.opacity(0.1))
+                        Capsule().fill(barColor(frac)).frame(width: max(3, g.size.width * CGFloat(frac)))
+                    }
+                }
+                .frame(height: 4)
+                Text("\(fmtTok(max(0, ctx - last))) of \(fmtTok(ctx)) left")
+            } else {
+                Spacer()
             }
         }
-        .font(.caption2.monospacedDigit())
+        .font(.caption.monospacedDigit())
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 14).padding(.vertical, 6)
+        .padding(.horizontal, 14).padding(.vertical, 8)
         .background(Color(white: 0.08))
     }
 }
@@ -609,7 +610,7 @@ struct ReconAIView: View {
             }
         }
         .padding(12).frame(maxWidth: .infinity, alignment: .leading)
-        .background(b.isError ? Color.red.opacity(0.08) : Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+        .background(b.isError ? Color.red.opacity(0.08) : Color.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 16))
         .contextMenu {
             Button { UIPasteboard.general.string = b.text } label: { Label("Copy", systemImage: "doc.on.doc") }
         }

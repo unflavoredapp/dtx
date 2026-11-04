@@ -4,7 +4,10 @@ extension Color {
     static let dtBG = Color.black
     static let dtCard = Color(red: 0.085, green: 0.085, blue: 0.095)
     static let dtLine = Color.white.opacity(0.10)
-    static var dtAccent: Color { LiveTheme.accent ?? Color(red: 0.64, green: 0.95, blue: 0.42) }      // lime green unless a live release says otherwise
+    /// the colour the person asked Ai-Decrypt for, else a live release's accent, else lime green
+    static var dtAccent: Color { UserTheme.accent ?? LiveTheme.accent ?? Color(red: 0.64, green: 0.95, blue: 0.42) }
+    /// label colour that stays readable on `dtAccent`
+    static var dtOnAccent: Color { UserTheme.onAccent }
     static let dtGreen = Color(red: 0.64, green: 0.95, blue: 0.42)
     static let dtYellow = Color(red: 0.98, green: 0.84, blue: 0.28)
 }
@@ -40,7 +43,7 @@ struct AccentButtonStyle: ButtonStyle {
         @Environment(\.isEnabled) private var enabled
         var body: some View {
             configuration.label
-                .foregroundStyle(Color.black)
+                .foregroundStyle(Color.dtOnAccent)
                 .padding(.horizontal, 14).padding(.vertical, 8)
                 .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.dtAccent))
                 .opacity(!enabled ? 0.4 : (configuration.isPressed ? 0.8 : 1))
@@ -72,7 +75,7 @@ struct AppBackground: View {
                 while x <= size.width { path.move(to: CGPoint(x: x, y: 0)); path.addLine(to: CGPoint(x: x, y: size.height)); x += 40 }
                 var y: CGFloat = 0
                 while y <= size.height { path.move(to: CGPoint(x: 0, y: y)); path.addLine(to: CGPoint(x: size.width, y: y)); y += 40 }
-                ctx.stroke(path, with: .color(Color(red: 0.64, green: 0.95, blue: 0.42).opacity(0.045)), lineWidth: 0.5)
+                ctx.stroke(path, with: .color(Color.dtAccent.opacity(0.045)), lineWidth: 0.5)
             }
         }
         .ignoresSafeArea()
