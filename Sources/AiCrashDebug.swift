@@ -23,7 +23,7 @@ enum AiCrashTool {
         ] as [String: Any],
     ]
 
-    struct Match: Decodable, Identifiable {
+    struct Match: Decodable, Identifiable, Equatable {
         var id: String { hex + (function ?? "") }
         var offset: Int
         var hex: String
@@ -37,7 +37,7 @@ enum AiCrashTool {
         var risky: Bool?
     }
     private struct LocateReply: Decodable { var matched: Bool; var image: String?; var imageMatchKind: String?; var candidateImages: [String]?; var matches: [Match]? }
-    struct CheckCrash: Decodable { var verdict: String; var duplicate: Bool?; var crashUuid: String?; var builtUuid: String?; var incidentId: String?; var captureTime: String? }
+    struct CheckCrash: Decodable, Equatable { var verdict: String; var duplicate: Bool?; var crashUuid: String?; var builtUuid: String?; var incidentId: String?; var captureTime: String? }
 
     struct Result {
         var image: String?
