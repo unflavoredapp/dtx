@@ -304,6 +304,24 @@ function mount(app, o) {
   const audit = (req, action, target, detail) => { if (R) R.log(req, action, target, detail); };
   const actorOf = (req) => (R ? R.actorFrom(req) : '?');
 
+  // Ai-Decrypt brief: plain text the chat reads when it opens. Edit <dataDir>/ai-knowledge.md any time (no app release needed).
+  // First request copies the shipped default there so it survives deploys.
+  const kFile = path.join(o.dataDir, 'ai-knowledge.md');
+  const kDefault = path.join(__dirname, 'ai-knowledge.default.md');
+  console.log('[ai] knowledge file:', kFile);
+  app.get('/api/ai/knowledge', (req, res) => {
+    let text = '';
+    try {
+      if (!fs.existsSync(kFile) && fs.existsSync(kDefault)) fs.copyFileSync(kDefault, kFile);
+      text = fs.readFileSync(fs.existsSync(kFile) ? kFile : kDefault, 'utf8');
+    } catch { /* empty brief */ }
+    res.json({ text: text.slice(0, 20000) });
+  });
+  app.put('/api/staff/ai/knowledge', guard, express.text({ type: '*/*', limit: '200kb' }), (req, res) => {
+    try { fs.writeFileSync(kFile, String(req.body || '')); audit(req, 'ai-knowledge', 'edit', ''); res.json({ ok: true }); }
+    catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   app.get(`${B}/status`, guard, (req, res) => res.json({ ...tool.status(o.dataDir), jobs: [...jobs.values()].slice(-10).map((j) => ({ id: j.id, state: j.state })) }));
 
   app.post(`${B}/setup`, guard, (req, res) => {

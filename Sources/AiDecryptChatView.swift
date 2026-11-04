@@ -177,6 +177,7 @@ enum AiDecryptAPI {
         endpoint: URL = AiDecryptAPI.endpoint,
         model: String = AiDecryptAPI.model,
         sink: AiStreamSink? = nil,
+        thinking: Bool = false,
         onDelta: @escaping (String) -> Void
     ) async throws -> [AiToolCallResult] {
         var request = URLRequest(url: endpoint, timeoutInterval: 180)
@@ -209,7 +210,11 @@ enum AiDecryptAPI {
             "max_tokens": 4096,
             "stream_options": ["include_usage": true],
             "cache_prompt": true,
+            "temperature": thinking ? 0.6 : 0.7,
+            "top_p": thinking ? 0.95 : 0.8,
+            "top_k": 20,
         ]
+        if thinking { body["chat_template_kwargs"] = ["enable_thinking": true]; body["max_tokens"] = 8192 }
         if let tools, !tools.isEmpty { body["tools"] = tools; body["tool_choice"] = "auto" }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
@@ -327,17 +332,21 @@ final class AiDecryptViewModel: ObservableObject {
     @Published var binaryAttachment: AiBinaryAttachment?
     @Published var pendingImage: AiImageAttachment?
     @Published var isFetchingWebpage = false
+    /// turns the model's step-by-step reasoning on for this chat (slower, better at logic)
+    @Published var thinkHarder = AiPrefs.thinkDefault
     @Published var live = AiLiveStats()
     /// Tokens used in this chat (staff and admin have no cap, so this is only a running total).
     @Published var usage = ReconstructAPI.AIUsage(ctx: AiDecryptAPI.contextWindow)
     @Published var conversations: [SavedConversation] = []
     private(set) var currentID = UUID()
     private var summary = ""
+    private var learnTurns = 0
     private var foldedUsers = 0
 
     init() {
         conversations = ChatArchive.load().sorted { $0.updated > $1.updated }
         if let last = conversations.first { restore(last) }
+        Task { await AiKnowledge.refresh() }
     }
 
     private func restore(_ c: SavedConversation) {
@@ -690,12 +699,16 @@ final class AiDecryptViewModel: ObservableObject {
     /// transcript on every request — never stored in `messages`, so it doesn't show up in the UI.
     private func apiMessages(upTo index: Int) -> [AiChatMessage] {
         var out: [AiChatMessage] = []
-        out.append(AiChatMessage(role: .system, content:
-            "Style: you can use emojis naturally when they fit the mood (not every line). You can send an animated GIF with the send_gif tool " +
-            "for reactions, celebrations and jokes, or when asked — sparingly, then add at most one short line. " +
-            "Chat entries written like \"[sent a GIF: …]\" are GIFs that were sent; never type that text yourself, call send_gif instead. " +
-            "If the person wants to choose or fine-tune a colour themselves, or gives a hex code, call show_color_picker to open an interactive colour wheel in the chat."
-        ))
+        out.append(AiChatMessage(role: .system, content: AiKnowledge.systemPrompt()))
+        var style = AiPrefs.emojis
+            ? "Style: you can use emojis naturally when they fit the mood (not every line). "
+            : "Style: do not use emojis. "
+        if AiPrefs.gifs {
+            style += "You can send an animated GIF with the send_gif tool for reactions, celebrations and jokes, or when asked — sparingly, then add at most one short line. " +
+                "Chat entries written like \"[sent a GIF: …]\" are GIFs that were sent; never type that text yourself, call send_gif instead. "
+        }
+        style += "If the person wants to choose or fine-tune a colour themselves, or gives a hex code, call show_color_picker to open an interactive colour wheel in the chat."
+        out.append(AiChatMessage(role: .system, content: style))
         if !summary.isEmpty {
             out.append(AiChatMessage(role: .system, content: "Memory of the earlier part of this conversation (summarized):\n\(summary)"))
         }
@@ -741,6 +754,13 @@ final class AiDecryptViewModel: ObservableObject {
         finishRun()
         persist()
         isStreaming = false
+        // learn from this exchange in the background (every other message) so replies fit the person better over time
+        learnTurns += 1
+        if learnTurns % 2 == 1,
+           let u = messages.last(where: { $0.role == .user })?.content,
+           let a = messages.last(where: { $0.role == .assistant && !$0.content.isEmpty && $0.card == nil })?.content {
+            Task { await AiPersona.update(userText: u, reply: a) }
+        }
     }
 
     /// Vision turn. The vision model can't call tools, so when the person wants an image made from what's
@@ -797,14 +817,15 @@ final class AiDecryptViewModel: ObservableObject {
             let assistantIndex = messages.count
             messages.append(AiChatMessage(role: .assistant, content: ""))
             do {
-                var tools: [[String: Any]] = [AiImageGen.schema, AiRepoTools.searchAppsSchema, AiThemeTool.schema, AiGifTool.schema, AiColorIntent.schema]
+                var tools: [[String: Any]] = [AiImageGen.schema, AiRepoTools.searchAppsSchema, AiThemeTool.schema, AiColorIntent.schema] + (AiPrefs.gifs ? [AiGifTool.schema] : [])
                 if binaryAttachment != nil { tools += AiToolBridge.toolSchemas() }
 
                 beginCall()
                 let calls = try await AiDecryptAPI.streamChat(
                     messages: apiMessages(upTo: assistantIndex),
                     tools: tools,
-                    sink: sink
+                    sink: sink,
+                    thinking: thinkHarder
                 ) { [weak self] delta in self?.appendThrottled(delta, at: assistantIndex) }
                 flushNow(at: assistantIndex)
 
@@ -1377,6 +1398,7 @@ struct AiDecryptChatView: View {
                 Button { showWebpageAlert = true } label: { Label("Webpage", systemImage: "globe") }
                 Button { showGifPicker = true } label: { Label("GIF", systemImage: "face.smiling") }
                 Button { viewModel.showColorWheel() } label: { Label("Colour wheel", systemImage: "paintpalette") }
+                Toggle(isOn: $viewModel.thinkHarder) { Label("Think harder", systemImage: "brain") }
             } label: {
                 Image(systemName: "plus")
                     .font(.system(size: 21, weight: .regular))
@@ -1384,6 +1406,7 @@ struct AiDecryptChatView: View {
                     .frame(width: 40, height: 40)
             }
 
+            if viewModel.thinkHarder { Image(systemName: "brain").font(.system(size: 15)).foregroundStyle(Color.dtAccent) }
             TextField("Message Ai-Decrypt", text: $viewModel.draft, axis: .vertical)
                 .font(.system(size: 17))
                 .foregroundStyle(.white)

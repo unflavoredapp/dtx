@@ -145,7 +145,7 @@ private func fmtMs(_ ms: Int) -> String {
     return fmtSec(Int(s))
 }
 private func fmtSec(_ s: Int) -> String { s < 60 ? "\(s)s" : "\(s / 60)m \(s % 60)s" }
-private func fmtTok(_ n: Int) -> String {
+func fmtTok(_ n: Int) -> String {
     if n < 1000 { return "\(n)" }
     if n < 100_000 { return String(format: "%.1fk", Double(n) / 1000) }
     return String(format: "%.0fk", Double(n) / 1000)

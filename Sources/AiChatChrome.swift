@@ -38,7 +38,7 @@ struct AiSidebar: View {
 
     @State private var query = ""
     @State private var searching = false
-    @State private var confirmClear = false
+    @State private var showSettings = false
     @FocusState private var searchFocused: Bool
 
     private var filtered: [SavedConversation] {
@@ -110,10 +110,7 @@ struct AiSidebar: View {
                         .shadow(color: Color.dtAccent.opacity(0.35), radius: 12, y: 4)
                 }
                 Spacer()
-                Menu {
-                    Button { onLeave() } label: { Label(leaveTitle, systemImage: leaveIcon) }
-                    Button(role: .destructive) { confirmClear = true } label: { Label("Delete all chats", systemImage: "trash") }
-                } label: {
+                Button { showSettings = true } label: {
                     Image(systemName: "gearshape").font(.system(size: 20, weight: .medium)).foregroundStyle(.white)
                         .aiGlassCircle(52)
                 }
@@ -121,9 +118,8 @@ struct AiSidebar: View {
             .padding(.horizontal, 18).padding(.bottom, 14).padding(.top, 20)
             .background(LinearGradient(colors: [Color.black.opacity(0), Color.black.opacity(0.85)], startPoint: .top, endPoint: .bottom))
         }
-        .confirmationDialog("Delete every saved chat?", isPresented: $confirmClear, titleVisibility: .visible) {
-            Button("Delete all", role: .destructive) { vm.deleteAll(); onClose() }
-            Button("Cancel", role: .cancel) {}
+        .fullScreenCover(isPresented: $showSettings) {
+            AiSettingsView(vm: vm, leaveTitle: leaveTitle, leaveIcon: leaveIcon, onLeave: onLeave)
         }
     }
 

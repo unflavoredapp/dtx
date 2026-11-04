@@ -55,6 +55,7 @@ struct RootView: View {
     private var chatHome: some View {
         AiDecryptChatView(embedded: true)
             .environmentObject(store)
+            .environmentObject(session)
             .sheet(isPresented: $store.showQuickBuild) { QuickBuildView() }
             .sheet(isPresented: $store.showTools) { ToolsHubView() }
             .sheet(item: $store.pickedApp) { app in
@@ -82,7 +83,7 @@ struct RootView: View {
         .id("\(live.themeRev).\(userTheme.rev)")
         .sheet(isPresented: $store.showQuickBuild) { QuickBuildView() }
         .sheet(isPresented: $store.showTools) { ToolsHubView() }
-        .sheet(isPresented: $store.showAiDecrypt) { AiDecryptChatView().environmentObject(store) }
+        .sheet(isPresented: $store.showAiDecrypt) { AiDecryptChatView().environmentObject(store).environmentObject(session) }
         .sheet(item: $store.pickedApp) { app in
             NavigationStack {
                 AppDetailView(app: app)
