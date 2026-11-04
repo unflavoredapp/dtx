@@ -67,7 +67,7 @@ struct ReconEditorView: View {
     private func load() async {
         loading = true; error = nil
         do { files = try await ReconstructAPI.files(jobID: jobID) }
-        catch { error = "Couldn't load the recovered project: \(error.localizedDescription)" }
+        catch { self.error = "Couldn't load the recovered project: \(error.localizedDescription)" }
         loading = false
     }
 
@@ -155,7 +155,7 @@ struct ReconFileEditor: View {
     private func load() async {
         loading = true; error = nil
         do { text = try await ReconstructAPI.readFile(jobID: jobID, path: path); dirty = false }
-        catch { error = "Couldn't open \(path): \(error.localizedDescription)" }
+        catch { self.error = "Couldn't open \(path): \(error.localizedDescription)" }
         loading = false
     }
 
@@ -165,7 +165,7 @@ struct ReconFileEditor: View {
             do {
                 try await ReconstructAPI.writeFile(jobID: jobID, path: path, text: text)
                 dirty = false; status = "Saved. Build the dylib to compile your changes."
-            } catch { error = "Couldn't save: \(error.localizedDescription)" }
+            } catch { self.error = "Couldn't save: \(error.localizedDescription)" }
             saving = false
         }
     }
