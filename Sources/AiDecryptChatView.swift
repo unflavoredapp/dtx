@@ -410,7 +410,7 @@ final class AiDecryptViewModel: ObservableObject {
     }
 
     /// Writes this conversation (text turns only) to disk so it is still there next time.
-    private func persist() {
+    func persist() {
         let saved = messages.compactMap { m -> SavedMessage? in
             guard m.role == .user || m.role == .assistant, m.card == nil,
                   m.toolCalls == nil || m.gifURL != nil,

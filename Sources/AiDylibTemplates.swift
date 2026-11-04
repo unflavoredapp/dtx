@@ -16,7 +16,7 @@ enum AiDylibTemplate {
     @MainActor static var cached: [Info]?
 
     static func fetch() async -> [Info] {
-        if let c = cached { return c }
+        if let c = await cached { return c }
         do {
             let r: Reply = try await Api.shared.get("/api/staff/decomp/ai/dylib/templates")
             await MainActor.run { cached = r.templates }

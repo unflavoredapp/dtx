@@ -231,7 +231,7 @@ struct AiAuthoredCard: View {
                                                   onStart: { _ in }, progress: { p in buildLine = "Writing a fix… \(p.tokens) tokens" })
             fixReply = r.reply
             if let fp = r.patch { fixPatchID = fp.id } else { error = "Build failed, and no safe fix was found: " + r.reply }
-        } catch { error = "Build failed, and the fix request failed: " + error.localizedDescription }
+        } catch let err { error = "Build failed, and the fix request failed: " + err.localizedDescription }
         buildLine = ""
     }
 
