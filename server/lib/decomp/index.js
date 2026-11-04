@@ -716,7 +716,11 @@ function mount(app, o) {
   // Live Sync releases drafted by Ai-Decrypt, reviewed and published from the app (see liveadmin.js)
   try { require('./liveadmin')({ app, express, guard, audit }); } catch (e) { console.error('[decomp] live admin routes not mounted:', e.message); }
   // Ai-Decrypt editing: chat -> reviewable patch -> Apply / Revert (see aiedit.js)
-  try { require('./aiedit')({ app, express, B, guard, findPart, outRoot, audit, saveFile, findSdk: () => tool.findSdk(o.dataDir), env: process.env }); } catch (e) { console.error('[decomp] ai edit routes not mounted:', e.message); }
+  // admin or staff get no char/context caps in the AI patch engine (see aiedit.js's `elevated`) -- everyone this
+  // `guard` lets in already is staff in practice, but this checks the real role rather than assuming the guard is
+  // always configured, since `guard` silently becomes a no-op when `o.requireStaff` isn't supplied.
+  const isElevated = (req) => { if (!R) return false; const u = R.actorFrom(req); return R.isAdmin(u) || R.isStaff(u); };
+  try { require('./aiedit')({ app, express, B, guard, findPart, outRoot, audit, saveFile, findSdk: () => tool.findSdk(o.dataDir), isElevated, env: process.env }); } catch (e) { console.error('[decomp] ai edit routes not mounted:', e.message); }
 
   // ---- Editor extras: diff baseline, changed-file list, per-function evidence ----
   function origPath(part, rel) {

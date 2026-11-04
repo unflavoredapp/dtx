@@ -311,9 +311,12 @@ module.exports = function mountAiEdit(ctx) {
     }
     return null;
   }
-  function gather(part, b, sections) {
-    const dir = dirOf(part), cap = Number(env.OPTIMIZE_CTX_CHARS || 48000); let used = 0; const out = [];
-    const add = (title, body, lim) => { if (!body) return; let s = String(body); if (s.length > lim) s = s.slice(0, lim) + '\n…(truncated)'; if (used + s.length > cap) s = s.slice(0, Math.max(0, cap - used)); if (!s) return; used += s.length; out.push(`=== ${title} ===\n${s}`); if (sections) sections.push(title); };
+  // `elevated` (admin or staff — see isElevated() below) skips every per-section truncation; the overall `cap`
+  // still applies even then, as a sane ceiling against a pathological single project blowing past what the model
+  // can actually hold, not as a limit anyone is meant to hit in practice.
+  function gather(part, b, sections, elevated) {
+    const dir = dirOf(part), cap = elevated ? Number(env.OPTIMIZE_CTX_CHARS_STAFF || 400000) : Number(env.OPTIMIZE_CTX_CHARS || 48000); let used = 0; const out = [];
+    const add = (title, body, lim) => { if (!body) return; let s = String(body); if (!elevated && s.length > lim) s = s.slice(0, lim) + '\n…(truncated)'; if (used + s.length > cap) s = s.slice(0, Math.max(0, cap - used)); if (!s) return; used += s.length; out.push(`=== ${title} ===\n${s}`); if (sections) sections.push(title); };
     const file = b.file ? resolve(part, b.file) : null;
     if (file) {
       const t = readText(file.full) || '', lim = 22000;
@@ -345,20 +348,17 @@ module.exports = function mountAiEdit(ctx) {
     }
     const pp = loadPatches(part).slice(-12);
     if (pp.length) add('Patches made in this job so far', pp.map((p) => `[${p.status}] ${p.title} — ${[...new Set((p.edits || []).map((e) => e.path))].join(', ')}`).join('\n'), 1800);
-    // survives beyond this one job/session (stored in manifest.json): the project's goal, recent decisions and
-    // recent build attempts, even after the project has been re-imported from a downloaded zip.
-    add('Project memory (persists across sessions)', pmem.summary(dir), 2500);
-    const symSdk = ctx.findSdk ? (() => { try { return ctx.findSdk(); } catch { return null; } })() : null;
-    // every class and its methods, every bare function — so a change to one file can account for how it's used
-    // elsewhere without the model having had to open every file itself first. AST-backed where clang/the SDK can
-    // parse the file, regex fallback otherwise (see symbols.js); either way it's cached and only re-parses files
-    // that changed since the last turn.
-    add('Project symbol index (every class/method/function in this project)', symbols.summaryFor(dir, 3000, { sdk: symSdk }), 3000);
-    if (file) add(`Cross-file dependencies of ${file.norm} (textual, not semantic — what else mentions symbols defined here, and vice versa)`, symbols.depsFor(dir, file.norm, { sdk: symSdk }), 1500);
     add('Correctness gate', readText(path.join(dir, 'Report/verification.md')), 4000);
     add('Every unresolved hook / failing check, all at once (fix them together in ONE patch)', hookReport(dir), 5000);
     add('Hook graph', readText(path.join(dir, 'Report/hookgraph.md')), 3500);
     add('Analyzer disagreements', readText(path.join(dir, 'Report/agreement.md')), 2500);
+    // Lowest priority, added last so they're the first things trimmed when the file(s) above already fill the
+    // budget (a 1000+ line open file easily does on its own) — nice-to-have project awareness, never at the
+    // cost of the actual code or diagnostics the request needs.
+    const symSdk = ctx.findSdk ? (() => { try { return ctx.findSdk(); } catch { return null; } })() : null;
+    add('Project memory (persists across sessions)', pmem.summary(dir), 1800);
+    add('Project symbol index (every class/method/function in this project)', symbols.summaryFor(dir, 2000, { sdk: symSdk }), 2000);
+    if (file) add(`Cross-file dependencies of ${file.norm} (textual, not semantic)`, symbols.depsFor(dir, file.norm, { sdk: symSdk }), 1000);
     return out.join('\n\n');
   }
 
@@ -422,6 +422,30 @@ module.exports = function mountAiEdit(ctx) {
   }
 
   // ================= 2. every unresolved hook at once: what the gate lists + where each symbol is defined / used =================
+  // A retry (bad JSON, a compile error, a rejected patch) doesn't need the whole project again -- the model just
+  // needs the file it's editing and the specific thing that went wrong. Resending the full gather() context (which
+  // can run to the 48k-char cap on a project with one huge file) on every one of up to 3 attempts was the actual
+  // cost driver behind a single failed request burning tens of thousands of tokens: attempt 2 and 3 were each
+  // paying for the full project context again on top of the growing conversation. This keeps retries to roughly
+  // one file's worth of content instead of the whole project.
+  function retryContext(part, b, elevated) {
+    const dir = dirOf(part);
+    const file = b.file ? resolve(part, b.file) : null;
+    let out = '';
+    if (file) {
+      const lim = elevated ? 60000 : 14000;
+      const t = readText(file.full) || '';
+      out += `Open file ${file.norm}:\n` + t.split('\n').map((l, k) => `${k + 1}| ${l}`).join('\n').slice(0, lim) + '\n\n';
+    }
+    const d = diag.parse(dir);
+    if (d.hasReport || d.errors) {
+      const lines = [];
+      for (const [f, arr] of Object.entries(d.files)) for (const x of arr.slice(0, 6)) lines.push(`${f}:${x.line}:${x.col}: ${x.sev}: ${x.msg}`);
+      if (lines.length) out += `Build diagnostics (${d.errors} error(s)):\n` + lines.slice(0, 40).join('\n');
+    }
+    return out.trim() || '(no file was open)';
+  }
+
   function srcFiles(dir) {
     const out = [];
     (function w(d, depth) {
@@ -541,7 +565,7 @@ module.exports = function mountAiEdit(ctx) {
     return null;
   }
 
-  async function modelReply(part, b, history, job) {
+  async function modelReply(part, b, history, job, elevated) {
     if (!LLM.url()) return { reply: 'No model is connected on this server. Set OPTIMIZE_LLM_URL to an OpenAI-compatible endpoint (the same one Reconstruct Studio\'s Optimize assistant uses) and restart.' };
     stepTo(job, 'context', 'Reading the project');
     const hint = { explain: 'Explain what this code most likely does and how reliable the reconstruction is. Do not propose a patch unless something is clearly broken.', fix: 'Fix EVERY build error and correctness-gate failure listed above in ONE patch, with the smallest correct changes. You MUST decide which file to edit yourself from the diagnostics and the open file; never ask the person which file or what change to make. For an unresolved hook (a method_setImplementation / %hook that references a replacement that is never installed), write the missing installation or definition in the file that already declares it. Return a patch. Only if it truly cannot be done safely, set patch to null and name the ONE concrete blocker.', improve: 'Improve readability only: meaningful names for param_N / local variables where the evidence supports them, no behaviour change. Keep every method and hook.' }[b.action] || '';
@@ -555,7 +579,7 @@ module.exports = function mountAiEdit(ctx) {
       if (!b.file && tri && tri.files[0]) b = Object.assign({}, b, { file: tri.files[0] });
       stepTo(job, 'triage', 'Triage by the helper models', tri ? tri.files.length + ' file(s), ' + tri.causes.length + ' cause(s)' : 'skipped');
     }
-    const sections = [], ctxText0 = gather(part, b, sections);
+    const sections = [], ctxText0 = gather(part, b, sections, elevated);
     const ctxText = tri && (tri.causes.length || tri.files.length)
       ? '=== Triage notes (from a small fast helper model: use as hints and verify against the code) ===\n' + (tri.files.length ? 'Likely files: ' + tri.files.join(', ') + '\n' : '') + tri.causes.map((c) => '- ' + c).join('\n') + '\n\n' + ctxText0
       : ctxText0;
@@ -563,12 +587,19 @@ module.exports = function mountAiEdit(ctx) {
     if (job) job.sections = sections.map((s) => s.replace(/\s*\(.*$/, '').slice(0, 60));
     const base =[{ role: 'system', content: SYSTEM }, ...recallHistory(history),
       { role: 'user', content: `Project context:\n${ctxText}\n\nRequest: ${b.message}${hint ? '\n\n' + hint : ''}` }];
+    // retries reuse only the system prompt + the file/diagnostics, not the full project context above — see
+    // retryContext() for why; computed lazily since most requests succeed on attempt 1 and never need it.
+    let retryBase = null;
+    const forRetry = (r, nudge) => {
+      if (!retryBase) retryBase = [base[0], { role: 'user', content: `Project context (trimmed for a retry — the full project was already sent once):\n${retryContext(part, b, elevated)}\n\nRequest: ${b.message}${hint ? '\n\n' + hint : ''}` }];
+      return [...retryBase, { role: 'assistant', content: r.text.slice(0, 3000) }, { role: 'user', content: nudge }];
+    };
     let messages = base, lastErr = '';
     for (let attempt = 1; attempt <= 3; attempt++) {
       const r = await chatCompletion(messages, attempt, job);
       if (job) { const secs = job.firstTok ? Math.max(1, (job.lastTok - job.firstTok) / 1000) : 0; stepTo(job, 'check', 'Checking the answer', job.tokens ? job.tokens + ' tokens' + (secs ? ' · ' + (job.tokens / secs).toFixed(1) + '/s' : '') : ''); }
       const j = parseModelJson(r.text);
-      if (!j) { lastErr = 'the answer was not valid JSON'; if (job && attempt < 3) stepTo(job, 'retry', 'Answer was malformed — asking again'); messages = [...base, { role: 'assistant', content: r.text.slice(0, 3000) }, { role: 'user', content: 'That was not a single valid JSON object. Answer again with only the JSON object described in the instructions.' }]; continue; }
+      if (!j) { lastErr = 'the answer was not valid JSON'; if (job && attempt < 3) stepTo(job, 'retry', 'Answer was malformed — asking again'); messages = forRetry(r, 'That was not a single valid JSON object. Answer again with only the JSON object described in the instructions.'); continue; }
       const reply = String(j.reply || '').slice(0, 4000);
       if (!j.patch) return { reply: reply || 'I could not find a safe change to propose.', model: r.model };
       stepTo(job, 'check', 'Compiling the changed files');
@@ -577,7 +608,7 @@ module.exports = function mountAiEdit(ctx) {
         lastErr = 'it would not compile: ' + syn.newErrors[0];
         if (attempt < 3) {
           stepTo(job, 'retry', 'Patch would not compile — asking again', syn.newErrors[0].slice(0, 120));
-          messages = [...base, { role: 'assistant', content: r.text.slice(0, 3000) }, { role: 'user', content: 'Compiling the changed file with clang shows this patch introduces new errors:\n' + syn.newErrors.join('\n') + '\nFix them and answer again with only the JSON object.' }];
+          messages = forRetry(r, 'Compiling the changed file with clang shows this patch introduces new errors:\n' + syn.newErrors.join('\n') + '\nFix them and answer again with only the JSON object.');
           continue;
         }
         return { reply: (reply ? reply + '\n\n' : '') + 'I could not produce a patch that compiles. The last attempt added:\n' + syn.newErrors.map((e) => '- `' + e + '`').join('\n') + '\nNothing was changed.', model: r.model };
@@ -587,7 +618,7 @@ module.exports = function mountAiEdit(ctx) {
       if (pt.status === 'proposed') return { reply: (reply || 'Here is the proposed change.') + '\n\nNothing has been changed yet. Review the diff and press Apply.', patch: pt, model: r.model };
       lastErr = pt.blockReason;
       if (/removes|suppression|not found|appears \d+ times|not an editable|identical|only "replace"/.test(pt.blockReason || '') && attempt < 3) stepTo(job, 'retry', 'Patch rejected — asking again', String(pt.blockReason || '').slice(0, 120));
-      if (/removes|suppression|not found|appears \d+ times|not an editable|identical|only "replace"/.test(pt.blockReason || '') && attempt < 3) messages =[...base, { role: 'assistant', content: r.text.slice(0, 3000) }, { role: 'user', content: 'The patch was rejected: ' + pt.blockReason + ' Fix that and answer again with only the JSON object.' }];
+      if (/removes|suppression|not found|appears \d+ times|not an editable|identical|only "replace"/.test(pt.blockReason || '') && attempt < 3) messages = forRetry(r, 'The patch was rejected: ' + pt.blockReason + ' Fix that and answer again with only the JSON object.');
       else return { reply: (reply ? reply + '\n\n' : '') + 'I could not produce a patch that passes the safety checks: ' + pt.blockReason, patch: pt, model: r.model };
     }
     return { reply: 'I could not produce a valid patch after 3 attempts (' + lastErr + '). Nothing was changed.' };
@@ -627,7 +658,10 @@ module.exports = function mountAiEdit(ctx) {
 
   app.post(`${B}/jobs/:id/ai/chat`, guard, express.json({ limit: '40kb' }), (req, res) => {
     const part = part404(req, res); if (!part) return;
-    const b = req.body || {}, message = String(b.message || '').trim().slice(0, 2000);
+    // admin/staff (anyone this `guard` already lets in, in practice) aren't held to the same char caps as a
+    // hypothetical lower-trust caller: a longer request, and the full project context rather than the trimmed one.
+    const elevated = ctx.isElevated ? !!ctx.isElevated(req) : false;
+    const b = req.body || {}, message = String(b.message || '').trim().slice(0, elevated ? 20000 : 2000);
     if (!message) return res.status(400).json({ error: 'Type a request first.' });
     const key = part.dir, live = jobs.get(key);
     if (live && live.state === 'running') return res.status(409).json({ error: 'A request is already running for this job. Wait for it to finish.' });
@@ -638,7 +672,7 @@ module.exports = function mountAiEdit(ctx) {
     job.base = sessionUsage(chatBefore); job.baseLast = lastPromptOf(chatBefore);
     (async () => {
       const chat = loadChat(part); chat.push({ role: 'user', text: message, at: Date.now() });
-      let out; try { out = await modelReply(part, spec, chat.slice(0, -1), job); } catch (e) { out = e && e.stopped ? { reply: 'Stopped. Nothing was changed.' } : { reply: String((e && e.message) || e), err: true }; }
+      let out; try { out = await modelReply(part, spec, chat.slice(0, -1), job, elevated); } catch (e) { out = e && e.stopped ? { reply: 'Stopped. Nothing was changed.' } : { reply: String((e && e.message) || e), err: true }; }
       chat.push({ role: 'assistant', text: out.reply, at: Date.now(), patch: out.patch ? out.patch.id : null, err: out.err ? 1 : undefined, u: job.usage.prompt || job.usage.completion ? { prompt: job.usage.prompt, completion: job.usage.completion, lastPrompt: job.usage.lastPrompt, src: job.usage.src || 'estimate' } : undefined }); saveChat(part, chat);
       audit(req, 'ai-chat', `${part.dylibName}${spec.file ? ':' + spec.file : ''}`, `job ${req.params.id}${out.patch ? ' patch ' + out.patch.id : ''}`);
       return { reply: out.reply, patch: out.patch ? view(out.patch, true, part) : null };
