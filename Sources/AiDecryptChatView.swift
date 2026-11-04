@@ -256,6 +256,7 @@ struct SavedConversation: Codable, Identifiable {
     var completion = 0
     var src: String? = nil
     var lastPrompt: Int? = nil
+    var pinned: Bool? = nil
 }
 
 enum ChatArchive {
@@ -346,6 +347,45 @@ final class AiDecryptViewModel: ObservableObject {
     func open(_ id: UUID) {
         guard id != currentID, let c = conversations.first(where: { $0.id == id }) else { return }
         cancel(); persist(); restore(c)
+    }
+
+    var isCurrentPinned: Bool { conversations.first(where: { $0.id == currentID })?.pinned == true }
+
+    func togglePin(_ id: UUID) {
+        if id == currentID { persist() }
+        guard let i = conversations.firstIndex(where: { $0.id == id }) else { return }
+        conversations[i].pinned = !(conversations[i].pinned == true)
+        ChatArchive.save(conversations)
+    }
+
+    func deleteAll() {
+        cancel()
+        conversations = []
+        ChatArchive.save([])
+        blankChat()
+    }
+
+    /// Opens the colour wheel in the conversation (same card the hex / "colour wheel" messages produce).
+    func showColorWheel() {
+        guard !isStreaming else { return }
+        var reply = AiChatMessage(role: .assistant, content: "Here's the colour wheel — drag to pick, fine-tune the hex, then tap Apply to recolour the whole app.")
+        reply.card = .colorPicker(UserTheme.shared.hex ?? "B6FF3C")
+        messages.append(reply)
+    }
+
+    /// The conversation as a plain-text file for the share sheet.
+    func exportTranscript() -> URL? {
+        let lines = messages.compactMap { m -> String? in
+            guard m.role == .user || m.role == .assistant else { return nil }
+            var body = m.content
+            if let t = m.gifTitle, m.gifURL != nil { body += (body.isEmpty ? "" : " ") + "[GIF: \(t)]" }
+            guard !body.isEmpty else { return nil }
+            return (m.role == .user ? "You" : "Ai-Decrypt") + ":\n" + body
+        }
+        guard !lines.isEmpty else { return nil }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Ai-Decrypt chat.txt")
+        try? lines.joined(separator: "\n\n").write(to: url, atomically: true, encoding: .utf8)
+        return url
     }
 
     func delete(_ id: UUID) {
@@ -985,6 +1025,9 @@ final class AiDecryptViewModel: ObservableObject {
 // MARK: - Chat view
 
 struct AiDecryptChatView: View {
+    /// true when the chat IS the home screen (no sheet to close); false when opened as a sheet from the full app
+    var embedded = false
+    @AppStorage("dtx.chatOnly") private var chatOnly = true
     @StateObject private var viewModel = AiDecryptViewModel()
     @EnvironmentObject private var store: RepoStore
     @Environment(\.dismiss) private var dismiss
@@ -993,40 +1036,50 @@ struct AiDecryptChatView: View {
     @State private var webpageURL = ""
     @State private var photoItem: PhotosPickerItem?
     @State private var showPhotoPicker = false
-    @State private var showHistory = false
     @State private var showGifPicker = false
     @ObservedObject private var theme = UserTheme.shared
 
+    @State private var sidebarOpen = false
+    @State private var confirmDelete = false
+
+    private func setSidebar(_ open: Bool) {
+        inputFocused = false
+        withAnimation(.spring(response: 0.36, dampingFraction: 0.88)) { sidebarOpen = open }
+    }
+
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                // Each presentation modifier is attached to a DIFFERENT subview on purpose. SwiftUI does not
-                // reliably honor several presentation modifiers (.fileImporter / .photosPicker / .alert) stacked
-                // on one view — especially when that view is itself inside a .sheet, as this whole screen is.
-                // Only one tends to win and the others silently never present or never fire their callback.
-                // Spreading them across messageList / composer / the outer view keeps all three working.
-                messageList
-                    .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
-                    .onChange(of: photoItem) { _ in handlePickedPhoto() }
-                if let error = viewModel.errorText { errorBanner(error) }
-                AIUsageBar(usage: shownUsage)
-                    .sheet(isPresented: $showHistory) { AiHistorySheet(vm: viewModel) }
-                if !viewModel.pendingAttachments.isEmpty || viewModel.binaryAttachment != nil || viewModel.pendingImage != nil { attachmentChips }
-                composer
-                    .sheet(isPresented: $showGifPicker) { AiGifPickerSheet { viewModel.sendGif($0) } }
-            }
-            .background(AppBackground())
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Label("Ai-Decrypt", systemImage: "message.fill").labelStyle(OrangeIcon())
-                        .font(.headline).foregroundStyle(.white)
-                }
-                ToolbarItem(placement: .topBarLeading) { Button("Close") { dismiss() } }
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button { showHistory = true } label: { Image(systemName: "clock.arrow.circlepath") }
-                    Button { viewModel.newChat() } label: { Image(systemName: "square.and.pencil") }
-                }
+        GeometryReader { geo in
+            let sw = geo.size.width * 0.82
+            ZStack(alignment: .leading) {
+                AppBackground().ignoresSafeArea()
+                AiSidebar(
+                    vm: viewModel,
+                    onClose: { setSidebar(false) },
+                    onColorWheel: { setSidebar(false); viewModel.showColorWheel() },
+                    onGif: { setSidebar(false); DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { showGifPicker = true } },
+                    leaveTitle: embedded ? "Open full app" : "Make chat the home screen",
+                    leaveIcon: embedded ? "square.grid.2x2" : "house",
+                    onLeave: {
+                        if embedded { chatOnly = false } else { chatOnly = true; dismiss() }
+                    }
+                )
+                .frame(width: sw)
+
+                chatLayer
+                    .clipShape(RoundedRectangle(cornerRadius: sidebarOpen ? 32 : 0, style: .continuous))
+                    .overlay {
+                        if sidebarOpen {
+                            Color.black.opacity(0.4)
+                                .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
+                                .contentShape(Rectangle())
+                                .onTapGesture { setSidebar(false) }
+                                .gesture(DragGesture(minimumDistance: 12).onEnded { g in
+                                    if g.translation.width < -40 { setSidebar(false) }
+                                })
+                        }
+                    }
+                    .shadow(color: .black.opacity(sidebarOpen ? 0.5 : 0), radius: 18)
+                    .offset(x: sidebarOpen ? sw : 0)
             }
         }
         .id(theme.rev)      // recolours the open chat without losing the conversation (the view model lives outside this id)
@@ -1156,7 +1209,7 @@ struct AiDecryptChatView: View {
                     if viewModel.isStreaming { AiLiveStrip(live: viewModel.live).id("live") }
                     Color.clear.frame(height: 1).id("bottom")
                 }
-                .padding(14)
+                .padding(.horizontal, 14).padding(.top, 66).padding(.bottom, 10)
             }
             .onChange(of: viewModel.isStreaming) { s in if s { withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } } }
             .onChange(of: viewModel.messages.last?.content) { _ in
@@ -1198,36 +1251,105 @@ struct AiDecryptChatView: View {
             .background(Color.red.opacity(0.1))
     }
 
+    private var chatLayer: some View {
+        ZStack(alignment: .top) {
+            AppBackground().ignoresSafeArea()
+            messageList
+                .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
+                .onChange(of: photoItem) { _ in handlePickedPhoto() }
+            LinearGradient(colors: [Color.black.opacity(0.9), Color.black.opacity(0)], startPoint: .top, endPoint: .bottom)
+                .frame(height: 96)
+                .frame(maxHeight: .infinity, alignment: .top)
+                .ignoresSafeArea(edges: .top)
+                .allowsHitTesting(false)
+            topBar
+            // swipe in from the left edge to open the chat list
+            Color.clear.frame(width: 16).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 10).onEnded { g in
+                    if g.translation.width > 40 { setSidebar(true) }
+                })
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                if let error = viewModel.errorText { errorBanner(error) }
+                AIUsageBar(usage: shownUsage)
+                if !viewModel.pendingAttachments.isEmpty || viewModel.binaryAttachment != nil || viewModel.pendingImage != nil { attachmentChips }
+                composer
+                    .sheet(isPresented: $showGifPicker) { AiGifPickerSheet { viewModel.sendGif($0) } }
+            }
+        }
+    }
+
+    private var topBar: some View {
+        HStack(alignment: .top) {
+            Button { setSidebar(true) } label: {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 18, weight: .medium)).foregroundStyle(.white)
+                    .aiGlassCircle(46)
+                    .overlay(alignment: .topTrailing) {
+                        if viewModel.isStreaming { Circle().fill(Color.dtAccent).frame(width: 11, height: 11).offset(x: -4, y: 4) }
+                    }
+            }
+            Spacer()
+            HStack(spacing: 0) {
+                Button { viewModel.newChat() } label: {
+                    Image(systemName: "square.and.pencil").font(.system(size: 19, weight: .medium)).foregroundStyle(.white)
+                        .frame(width: 50, height: 46)
+                }
+                Menu {
+                    Button { if let url = viewModel.exportTranscript() { SharePresenter.present(url) } } label: { Label("Share", systemImage: "square.and.arrow.up") }
+                    Button { viewModel.togglePin(viewModel.currentID) } label: {
+                        Label(viewModel.isCurrentPinned ? "Unpin" : "Pin", systemImage: viewModel.isCurrentPinned ? "pin.slash" : "pin")
+                    }
+                    Button { viewModel.showColorWheel() } label: { Label("Colour wheel", systemImage: "paintpalette") }
+                    Button { showGifPicker = true } label: { Label("Send a GIF", systemImage: "face.smiling") }
+                    Button(role: .destructive) { confirmDelete = true } label: { Label("Delete", systemImage: "trash") }
+                    if !embedded { Button { dismiss() } label: { Label("Close", systemImage: "xmark") } }
+                } label: {
+                    Image(systemName: "ellipsis").font(.system(size: 19, weight: .bold)).foregroundStyle(.white)
+                        .frame(width: 50, height: 46)
+                }
+            }
+            .aiGlass(Capsule())
+        }
+        .padding(.horizontal, 14).padding(.top, 6)
+        .confirmationDialog("Delete this chat?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) { viewModel.delete(viewModel.currentID) }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
     private var composer: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 4) {
             Menu {
-                Button { pickFiles() } label: { Label("Upload files", systemImage: "paperclip") }
-                Button { showPhotoPicker = true } label: { Label("Attach photo", systemImage: "photo") }
-                Button { showWebpageAlert = true } label: { Label("Attach webpage", systemImage: "globe") }
-                Button { showGifPicker = true } label: { Label("Send a GIF", systemImage: "face.smiling") }
+                Button { showPhotoPicker = true } label: { Label("Photos", systemImage: "photo") }
+                Button { pickFiles() } label: { Label("Files", systemImage: "paperclip") }
+                Button { showWebpageAlert = true } label: { Label("Webpage", systemImage: "globe") }
+                Button { showGifPicker = true } label: { Label("GIF", systemImage: "face.smiling") }
+                Button { viewModel.showColorWheel() } label: { Label("Colour wheel", systemImage: "paintpalette") }
             } label: {
                 Image(systemName: "plus")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 30, height: 30)
+                    .font(.system(size: 21, weight: .regular))
+                    .foregroundStyle(.white)
+                    .frame(width: 40, height: 40)
             }
 
-            TextField("Message Ai-Decrypt...", text: $viewModel.draft, axis: .vertical)
-                .font(.subheadline)
+            TextField("Message Ai-Decrypt", text: $viewModel.draft, axis: .vertical)
+                .font(.system(size: 17))
                 .foregroundStyle(.white)
-                .lineLimit(1...5)
+                .lineLimit(1...6)
                 .focused($inputFocused)
-                .padding(.horizontal, 12).padding(.vertical, 9)
-                .glowCapsule()
+                .padding(.vertical, 8)
 
             Button {
                 inputFocused = false
                 viewModel.isStreaming ? viewModel.cancel() : viewModel.send()
             } label: {
                 Image(systemName: viewModel.isStreaming ? "stop.fill" : "arrow.up")
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(Color.dtOnAccent)
-                    .frame(width: 30, height: 30)
+                    .frame(width: 36, height: 36)
                     .background(Circle().fill(Color.dtAccent))
             }
             .disabled(
@@ -1237,9 +1359,12 @@ struct AiDecryptChatView: View {
                     && viewModel.pendingImage == nil
                     && !viewModel.isStreaming
             )
+            .opacity(viewModel.draft.trimmingCharacters(in: .whitespaces).isEmpty && !viewModel.isStreaming
+                     && viewModel.pendingAttachments.isEmpty && viewModel.binaryAttachment == nil && viewModel.pendingImage == nil ? 0.45 : 1)
         }
-        .padding(.horizontal, 12).padding(.vertical, 10)
-        .overlay(Divider().overlay(Color.dtLine), alignment: .top)
+        .padding(.horizontal, 6).padding(.vertical, 5)
+        .aiGlass(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 8)
     }
 }
 

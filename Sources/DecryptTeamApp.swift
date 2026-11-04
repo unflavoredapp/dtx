@@ -24,6 +24,8 @@ struct RootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var live = LiveSync.shared
     @ObservedObject private var userTheme = UserTheme.shared
+    /// the app opens straight into Ai-Decrypt; the tabs are still there (chat sidebar → Open full app)
+    @AppStorage("dtx.chatOnly") private var chatOnly = true
 
     var body: some View {
         Group {
@@ -31,6 +33,8 @@ struct RootView: View {
                 ZStack { AppBackground(); ProgressView() }
             } else if !session.allowed {
                 OnboardingView()
+            } else if chatOnly {
+                chatHome
             } else {
                 mainTabs
             }
@@ -46,6 +50,20 @@ struct RootView: View {
         }
         .animation(.easeInOut(duration: 0.25), value: session.allowed)
         .onChange(of: scenePhase) { phase in if phase == .active { session.nudge(); if session.allowed { Task { await live.syncIfDue() } } } }
+    }
+
+    private var chatHome: some View {
+        AiDecryptChatView(embedded: true)
+            .environmentObject(store)
+            .sheet(isPresented: $store.showQuickBuild) { QuickBuildView() }
+            .sheet(isPresented: $store.showTools) { ToolsHubView() }
+            .sheet(item: $store.pickedApp) { app in
+                NavigationStack {
+                    AppDetailView(app: app)
+                        .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Close") { store.pickedApp = nil } } }
+                }
+                .preferredColorScheme(.dark)
+            }
     }
 
     private var mainTabs: some View {
