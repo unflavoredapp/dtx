@@ -144,6 +144,26 @@ enum AiDecryptAPI {
     static let visionEndpoint = URL(string: "https://ai.decrypt.team/v1vision/chat/completions")!
     static let visionModel = "AiDecryptVision"
 
+    /// A small, separately pinned model for background chores (memory summaries). If that endpoint isn't there the
+    /// chore silently runs on the main model instead, and the worker is not tried again this session.
+    static let workerEndpoint = URL(string: "https://ai.decrypt.team/v1worker/chat/completions")!
+    static let workerModel = "AiDecryptWorker"
+    static var workerDown = false
+
+    static func streamWorker(messages: [AiChatMessage], onDelta: @escaping (String) -> Void) async throws {
+        if !workerDown {
+            var got = ""
+            do {
+                try await streamChat(messages: messages, tools: nil, endpoint: workerEndpoint, model: workerModel) { got += $0; onDelta($0) }
+                return
+            } catch {
+                workerDown = true
+                if !got.isEmpty { return }
+            }
+        }
+        _ = try await streamChat(messages: messages, tools: nil, onDelta: onDelta)
+    }
+
     /// Streams the assistant's reply token-by-token (`onDelta`, called on the main actor) and returns any
     /// tool calls the model asked for once the stream ends. `tools` is the OpenAI-style function list —
     /// pass nil/empty when there's nothing for the model to call.
@@ -188,6 +208,7 @@ enum AiDecryptAPI {
             "stream": true,
             "max_tokens": 4096,
             "stream_options": ["include_usage": true],
+            "cache_prompt": true,
         ]
         if let tools, !tools.isEmpty { body["tools"] = tools; body["tool_choice"] = "auto" }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -199,6 +220,25 @@ enum AiDecryptAPI {
         }
 
         var callsByIndex: [Int: (id: String, name: String, arguments: String)] = [:]
+        // Tokens are gathered off the main thread and handed over ~22×/second in one hop, so a busy UI never
+        // stalls the network read (and the UI isn't hit with one update per token).
+        var buf = ""
+        var nReason = 0, nContent = 0, nTool = 0
+        var usageEv: (Int, Int)? = nil
+        var lastFlush = Date.distantPast
+        func flush() async {
+            guard !buf.isEmpty || nReason > 0 || nContent > 0 || nTool > 0 || usageEv != nil else { return }
+            let b = buf, r = nReason, c = nContent, t = nTool, u = usageEv
+            buf = ""; nReason = 0; nContent = 0; nTool = 0; usageEv = nil
+            lastFlush = Date()
+            await MainActor.run {
+                for _ in 0..<r { sink?.handle(.reasoning) }
+                for _ in 0..<c { sink?.handle(.content) }
+                if t > 0 { sink?.handle(.toolCall) }
+                if let u { sink?.handle(.usage(prompt: u.0, completion: u.1)) }
+                if !b.isEmpty { onDelta(b) }
+            }
+        }
         for try await line in bytes.lines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard trimmed.hasPrefix("data:") else { continue }
@@ -208,32 +248,28 @@ enum AiDecryptAPI {
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else { continue }
             if let u = json["usage"] as? [String: Any], let pt = u["prompt_tokens"] as? Int, let ct = u["completion_tokens"] as? Int {
-                await MainActor.run { sink?.handle(.usage(prompt: pt, completion: ct)) }
+                usageEv = (pt, ct)
             }
-            guard let choices = json["choices"] as? [[String: Any]],
-                  let delta = choices.first?["delta"] as? [String: Any]
-            else { continue }
-
-            if let r = delta["reasoning_content"] as? String, !r.isEmpty {
-                await MainActor.run { sink?.handle(.reasoning) }
-            }
-            if let content = delta["content"] as? String, !content.isEmpty {
-                await MainActor.run { sink?.handle(.content); onDelta(content) }
-            }
-            if let toolCalls = delta["tool_calls"] as? [[String: Any]] {
-                await MainActor.run { sink?.handle(.toolCall) }
-                for tc in toolCalls {
-                    let idx = tc["index"] as? Int ?? 0
-                    var entry = callsByIndex[idx] ?? (id: "", name: "", arguments: "")
-                    if let id = tc["id"] as? String, !id.isEmpty { entry.id = id }
-                    if let fn = tc["function"] as? [String: Any] {
-                        if let name = fn["name"] as? String, !name.isEmpty { entry.name = name }
-                        if let args = fn["arguments"] as? String { entry.arguments += args }
+            if let choices = json["choices"] as? [[String: Any]], let delta = choices.first?["delta"] as? [String: Any] {
+                if let r = delta["reasoning_content"] as? String, !r.isEmpty { nReason += 1 }
+                if let content = delta["content"] as? String, !content.isEmpty { nContent += 1; buf += content }
+                if let toolCalls = delta["tool_calls"] as? [[String: Any]] {
+                    nTool += 1
+                    for tc in toolCalls {
+                        let idx = tc["index"] as? Int ?? 0
+                        var entry = callsByIndex[idx] ?? (id: "", name: "", arguments: "")
+                        if let id = tc["id"] as? String, !id.isEmpty { entry.id = id }
+                        if let fn = tc["function"] as? [String: Any] {
+                            if let name = fn["name"] as? String, !name.isEmpty { entry.name = name }
+                            if let args = fn["arguments"] as? String { entry.arguments += args }
+                        }
+                        callsByIndex[idx] = entry
                     }
-                    callsByIndex[idx] = entry
                 }
             }
+            if Date().timeIntervalSince(lastFlush) > 0.045 { await flush() }
         }
+        await flush()
         return callsByIndex.values.filter { !$0.name.isEmpty }
             .map { AiToolCallResult(id: $0.id.isEmpty ? UUID().uuidString : $0.id, name: $0.name, arguments: $0.arguments) }
     }
@@ -269,8 +305,13 @@ enum ChatArchive {
         guard let data = try? Data(contentsOf: url), let list = try? JSONDecoder().decode([SavedConversation].self, from: data) else { return [] }
         return list
     }
+    private static let queue = DispatchQueue(label: "dtx.chat-archive", qos: .utility)
+    /// encoded and written on a background queue so saving never stalls typing or streaming
     static func save(_ list: [SavedConversation]) {
-        if let data = try? JSONEncoder().encode(list) { try? data.write(to: url, options: .atomic) }
+        let target = url
+        queue.async {
+            if let data = try? JSONEncoder().encode(list) { try? data.write(to: target, options: .atomic) }
+        }
     }
 }
 
@@ -435,10 +476,10 @@ final class AiDecryptViewModel: ObservableObject {
         }
         var out = ""
         do {
-            _ = try await AiDecryptAPI.streamChat(messages: [
+            try await AiDecryptAPI.streamWorker(messages: [
                 AiChatMessage(role: .system, content: "You maintain the long-term memory of a chat. Merge the earlier summary with the new conversation turns into ONE updated summary (max 350 words). Keep the person's goals, facts they stated, decisions made, names, file names, identifiers, code that mattered, and anything still unresolved. No preamble."),
                 AiChatMessage(role: .user, content: "Earlier summary:\n\(summary.isEmpty ? "(none yet)" : summary)\n\nNew turns:\n\(transcript)")
-            ], tools: nil) { out += $0 }
+            ]) { out += $0 }
             let t = out.trimmingCharacters(in: .whitespacesAndNewlines)
             if !t.isEmpty { summary = t }
         } catch { /* the old turns still leave the prompt so the request fits */ }
@@ -1008,7 +1049,7 @@ final class AiDecryptViewModel: ObservableObject {
         pendingAppend += delta
         if flushTask == nil {
             flushTask = Task {
-                try? await Task.sleep(nanoseconds: 100_000_000)
+                try? await Task.sleep(nanoseconds: 50_000_000)
                 flushNow(at: index)
                 flushTask = nil
             }
@@ -1214,7 +1255,8 @@ struct AiDecryptChatView: View {
             .onChange(of: viewModel.isStreaming) { s in if s { withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } } }
             .onChange(of: viewModel.messages.last?.content) { _ in
                 guard let last = viewModel.messages.last(where: { $0.role == .user || $0.role == .assistant }) else { return }
-                withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(last.id, anchor: .bottom) }
+                if viewModel.isStreaming { proxy.scrollTo("bottom", anchor: .bottom) }
+                else { proxy.scrollTo(last.id, anchor: .bottom) }
             }
         }
     }
@@ -1262,21 +1304,28 @@ struct AiDecryptChatView: View {
                 .frame(maxHeight: .infinity, alignment: .top)
                 .ignoresSafeArea(edges: .top)
                 .allowsHitTesting(false)
-            topBar
-            // swipe in from the left edge to open the chat list
-            Color.clear.frame(width: 16).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            // swipe in from the left edge to open the chat list (only the 16pt strip takes touches)
+            Color.clear.frame(width: 16)
                 .contentShape(Rectangle())
                 .gesture(DragGesture(minimumDistance: 10).onEnded { g in
                     if g.translation.width > 40 { setSidebar(true) }
                 })
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            topBar
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 if let error = viewModel.errorText { errorBanner(error) }
-                AIUsageBar(usage: shownUsage)
                 if !viewModel.pendingAttachments.isEmpty || viewModel.binaryAttachment != nil || viewModel.pendingImage != nil { attachmentChips }
-                composer
-                    .sheet(isPresented: $showGifPicker) { AiGifPickerSheet { viewModel.sendGif($0) } }
+                // one bar: a slim usage strip on top, a grey divider, then the composer
+                VStack(spacing: 0) {
+                    AIUsageBar(usage: shownUsage, compact: true)
+                    Rectangle().fill(Color.white.opacity(0.14)).frame(height: 0.5)
+                    composer
+                        .sheet(isPresented: $showGifPicker) { AiGifPickerSheet { viewModel.sendGif($0) } }
+                }
+                .aiGlass(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 8)
             }
         }
     }
@@ -1363,8 +1412,6 @@ struct AiDecryptChatView: View {
                      && viewModel.pendingAttachments.isEmpty && viewModel.binaryAttachment == nil && viewModel.pendingImage == nil ? 0.45 : 1)
         }
         .padding(.horizontal, 6).padding(.vertical, 5)
-        .aiGlass(RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 8)
     }
 }
 

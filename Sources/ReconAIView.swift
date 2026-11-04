@@ -375,20 +375,22 @@ struct AIProgressCard: View {
 /// (Staff and admin have no caps: the bar is the model's own window, not a quota.)
 struct AIUsageBar: View {
     let usage: ReconstructAPI.AIUsage
+    /// slim variant that sits inside the composer bar (no background of its own)
+    var compact = false
 
     var body: some View {
         // Staff and admin have no cap, so there is no "left" to count down: the bar is full and the figure is ∞.
-        HStack(spacing: 10) {
+        HStack(spacing: compact ? 8 : 10) {
             Label("\(usage.src == "estimate" ? "≈ " : "")\(fmtTok(usage.used)) used", systemImage: "chart.bar.fill")
             Capsule()
                 .fill(LinearGradient(colors: [Color.dtAccent.opacity(0.75), Color.dtAccent.opacity(0.25)], startPoint: .leading, endPoint: .trailing))
-                .frame(height: 4)
-            Text("∞ left").font(.caption.weight(.semibold))
+                .frame(height: compact ? 3 : 4)
+            Text("∞ left").font(.system(size: compact ? 11 : 12, weight: .semibold))
         }
-        .font(.caption.monospacedDigit())
+        .font(.system(size: compact ? 11 : 12).monospacedDigit())
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 14).padding(.vertical, 8)
-        .background(Color(white: 0.08))
+        .padding(.horizontal, 14).padding(.vertical, compact ? 6 : 8)
+        .background(compact ? Color.clear : Color(white: 0.08))
     }
 }
 

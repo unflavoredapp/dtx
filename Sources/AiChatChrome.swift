@@ -6,11 +6,10 @@ import UIKit
 extension View {
     /// A translucent, blurred shape with a hairline highlight — the floating-button look.
     func aiGlass<S: InsettableShape>(_ shape: S) -> some View {
+        // a flat translucent fill — no live blur or big shadow, which is what made scrolling stutter while streaming
         self
-            .background(.ultraThinMaterial, in: shape)
-            .background(shape.fill(Color.white.opacity(0.04)))
+            .background(shape.fill(Color(white: 0.115, opacity: 0.95)))
             .overlay(shape.strokeBorder(Color.white.opacity(0.09), lineWidth: 0.5))
-            .shadow(color: .black.opacity(0.35), radius: 10, y: 3)
     }
     func aiGlassCircle(_ size: CGFloat = 44) -> some View {
         self.frame(width: size, height: size).aiGlass(Circle())

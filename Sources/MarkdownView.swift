@@ -15,7 +15,18 @@ enum MDBlock {
 }
 
 enum MarkdownParser {
+    private final class Box { let blocks: [MDBlock]; init(_ b: [MDBlock]) { blocks = b } }
+    private static let cache: NSCache<NSString, Box> = { let c = NSCache<NSString, Box>(); c.countLimit = 200; return c }()
+
     static func parse(_ src: String) -> [MDBlock] {
+        let key = src as NSString
+        if let hit = cache.object(forKey: key) { return hit.blocks }
+        let out = parseUncached(src)
+        cache.setObject(Box(out), forKey: key)
+        return out
+    }
+
+    private static func parseUncached(_ src: String) -> [MDBlock] {
         let lines = src.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
         var out: [MDBlock] = []
         var para: [String] = []
@@ -244,7 +255,17 @@ struct MarkdownView: View {
     }
 
     /// Inline markdown (bold, italic, code, links) as an AttributedString. With `refs`, project file names become tappable.
+    private final class InlineBox { let value: AttributedString; init(_ v: AttributedString) { value = v } }
+    private static let inlineCache: NSCache<NSString, InlineBox> = { let c = NSCache<NSString, InlineBox>(); c.countLimit = 1500; return c }()
+
     static func inline(_ s: String, refs: FileRefResolver? = nil) -> AttributedString {
+        if refs == nil, let hit = inlineCache.object(forKey: s as NSString) { return hit.value }
+        let r = inlineUncached(s, refs: refs)
+        if refs == nil { inlineCache.setObject(InlineBox(r), forKey: s as NSString) }
+        return r
+    }
+
+    private static func inlineUncached(_ s: String, refs: FileRefResolver?) -> AttributedString {
         var opts = AttributedString.MarkdownParsingOptions()
         opts.interpretedSyntax = .inlineOnlyPreservingWhitespace
         opts.failurePolicy = .returnPartiallyParsedIfPossible
