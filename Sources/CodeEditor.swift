@@ -139,23 +139,23 @@ final class CodeSyntax {
         }
     }
 
-    func apply(to lm: NSLayoutManager, text: String, range: NSRange) {
-        lm.removeTemporaryAttribute(.foregroundColor, forCharacterRange: range)
+    func apply(to storage: NSTextStorage, text: String, range: NSRange) {
+        storage.addAttribute(.foregroundColor, value: CodePalette.text, range: range)
         for r in rules {
             r.regex.enumerateMatches(in: text, options: [], range: range) { m, _, _ in
-                if let m = m, m.range.length > 0 { lm.addTemporaryAttribute(.foregroundColor, value: r.color, forCharacterRange: m.range) }
+                if let m = m, m.range.length > 0 { storage.addAttribute(.foregroundColor, value: r.color, range: m.range) }
             }
         }
         if let tk = tokenizer {
             tk.enumerateMatches(in: text, options: [], range: range) { m, _, _ in
                 guard let m = m, m.range.length > 0 else { return }
                 let isComment = m.range(at: 1).location != NSNotFound
-                lm.addTemporaryAttribute(.foregroundColor, value: isComment ? self.commentColor : self.stringColor, forCharacterRange: m.range)
+                storage.addAttribute(.foregroundColor, value: isComment ? self.commentColor : self.stringColor, range: m.range)
             }
         }
         for r in postRules {
             r.regex.enumerateMatches(in: text, options: [], range: range) { m, _, _ in
-                if let m = m, m.range.length > 0 { lm.addTemporaryAttribute(.foregroundColor, value: r.color, forCharacterRange: m.range) }
+                if let m = m, m.range.length > 0 { storage.addAttribute(.foregroundColor, value: r.color, range: m.range) }
             }
         }
     }
@@ -235,6 +235,7 @@ final class CodeTextView: UITextView {
     var language: CodeLanguage
     var gutterWidth: CGFloat = 44
     var suppressAuto = false
+    private(set) var isStyling = false
     var markers: [Int: Int] = [:]   // line -> 1 warning, 2 error
     private(set) var codeFont: UIFont
     private(set) var numberFont: UIFont
@@ -297,6 +298,7 @@ final class CodeTextView: UITextView {
         updateGutterMetrics()
         rehighlight(force: true)
         updateCurrentLineHighlight()
+        resetTypingAttributes()
         gutter.setNeedsDisplay()
     }
 
@@ -377,6 +379,20 @@ final class CodeTextView: UITextView {
 
     // MARK: highlighting
 
+    /// Attribute-only edits of the text storage (colours). Wrapped so the delegate can ignore them.
+    func withAttributeEdit(_ body: (NSTextStorage) -> Void) {
+        isStyling = true
+        textStorage.beginEditing()
+        body(textStorage)
+        textStorage.endEditing()
+        isStyling = false
+    }
+
+    /// New typing must not inherit a neighbour's syntax / find colour.
+    func resetTypingAttributes() {
+        typingAttributes = [.font: codeFont, .foregroundColor: CodePalette.text]
+    }
+
     func visibleCharacterRange() -> NSRange {
         let total = textStorage.length
         guard bounds.height > 0, textContainer.size.width > 1 else { return NSRange(location: 0, length: min(total, 4000)) }
@@ -414,7 +430,9 @@ final class CodeTextView: UITextView {
             return
         }
         highlighted = win
-        syntax.apply(to: layoutManager, text: textStorage.string, range: win)
+        guard markedTextRange == nil else { return }
+        let str = textStorage.string
+        withAttributeEdit { st in syntax.apply(to: st, text: str, range: win) }
     }
 
     // MARK: input accessory
@@ -633,10 +651,9 @@ final class CodeEditorController: ObservableObject {
         matches = []
         regexInvalid = false
         regex = nil
-        let lm = tv.layoutManager
         let total = tv.textStorage.length
         let full = NSRange(location: 0, length: total)
-        lm.removeTemporaryAttribute(.backgroundColor, forCharacterRange: full)
+        tv.withAttributeEdit { $0.removeAttribute(.backgroundColor, range: full) }
         guard findActive, !query.isEmpty, total > 0 else {
             matchCount = 0; matchIndex = 0; current = -1
             return
@@ -679,17 +696,16 @@ final class CodeEditorController: ObservableObject {
 
     private func paint() {
         guard let tv = textView else { return }
-        let lm = tv.layoutManager
         let full = NSRange(location: 0, length: tv.textStorage.length)
-        lm.removeTemporaryAttribute(.backgroundColor, forCharacterRange: full)
-        for m in matches.prefix(5000) {
-            lm.addTemporaryAttribute(.backgroundColor, value: CodePalette.findMatch, forCharacterRange: m)
-        }
-        if current >= 0 && current < matches.count {
-            lm.addTemporaryAttribute(.backgroundColor, value: CodePalette.findCurrent, forCharacterRange: matches[current])
+        let shown = matches.prefix(5000)
+        let cur = (current >= 0 && current < matches.count) ? matches[current] : nil
+        tv.withAttributeEdit { st in
+            st.removeAttribute(.backgroundColor, range: full)
+            for m in shown where NSMaxRange(m) <= full.length { st.addAttribute(.backgroundColor, value: CodePalette.findMatch, range: m) }
+            if let c = cur, NSMaxRange(c) <= full.length { st.addAttribute(.backgroundColor, value: CodePalette.findCurrent, range: c) }
         }
         matchCount = matches.count
-        matchIndex = (current >= 0 && current < matches.count) ? current + 1 : 0
+        matchIndex = cur != nil ? current + 1 : 0
     }
 
     func next() { step(1) }
@@ -793,14 +809,15 @@ struct CodeEditorView: UIViewRepresentable {
         }
 
         func textViewDidChange(_ textView: UITextView) {
-            guard let t = self.textView else { return }
+            guard let t = self.textView, !t.isStyling else { return }
             t.didEdit()
             controller.textChanged()
             onEdit()
         }
 
         func textViewDidChangeSelection(_ textView: UITextView) {
-            guard let t = self.textView else { return }
+            guard let t = self.textView, !t.isStyling else { return }
+            t.resetTypingAttributes()
             t.updateCurrentLineHighlight()
             t.gutter.setNeedsDisplay()
             controller.refreshState()
