@@ -821,11 +821,13 @@ struct AiDecryptChatView: View {
                 viewModel.changeVersion(lib, to: version)
             })
         case .reconResults(let results):
-            AiReconResultsCard(results: results) { result in
+            AiReconResultsCard(results: results, onDownload: { result in
                 Task {
                     if let url = await viewModel.downloadRecovered(result) { SharePresenter.present(url) }
                 }
-            }
+            }, onEdit: { result in
+                ReconEditorPresenter.present(jobID: result.jobID, dylibName: result.dylibName)
+            })
         }
     }
 

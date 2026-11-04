@@ -96,6 +96,7 @@ struct ReconResult: Equatable {
     let dylibName: String
     let summary: String
     let downloadPath: String?   // GET this (staff-gated) to get the recovered project zip
+    var jobID: String = ""      // the decomp job, for browsing/editing/rebuilding its source
 }
 
 /// Drives the site's own Ghidra/lifter reconstruction engine, already mounted at /api/staff/decomp (staff-gated;
@@ -131,10 +132,53 @@ enum ReconstructAPI {
                     let part = job.items?.first?.parts?.first
                     let dyl = part?.dylibName ?? part?.name ?? name
                     return ReconResult(dylibName: dyl, summary: "Reconstructed \(dyl)",
-                                       downloadPath: "\(base)/jobs/\(started.id)/download?item=0&part=0")
+                                       downloadPath: "\(base)/jobs/\(started.id)/download?item=0&part=0",
+                                       jobID: started.id)
                 }
             } catch let e as ApiError where e.status == 0 { throw e }
             catch { misses += 1; if misses > 200 { throw error } }   // tolerate long Ghidra runs
         }
     }
+
+    // MARK: Browsing / editing / rebuilding the recovered project
+
+    struct DecompFile: Decodable, Identifiable, Equatable { var id: String { path }; let path: String; let size: Int }
+    private struct FilesReply: Decodable { let files: [DecompFile] }
+    private struct BuildState: Decodable { var state: String; var log: [String]?; var dylibName: String? }
+
+    private static func enc(_ s: String) -> String { s.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? s }
+
+    static func files(jobID: String) async throws -> [DecompFile] {
+        let r: FilesReply = try await Api.shared.get("\(base)/jobs/\(jobID)/files")
+        return r.files
+    }
+
+    static func readFile(jobID: String, path: String) async throws -> String {
+        let data = try await Api.shared.request("GET", "\(base)/jobs/\(jobID)/file?path=\(enc(path))")
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    static func writeFile(jobID: String, path: String, text: String) async throws {
+        _ = try await Api.shared.upload("PUT", "\(base)/jobs/\(jobID)/file?path=\(enc(path))", body: Data(text.utf8))
+    }
+
+    /// Compiles the (possibly hand-edited) recovered project back into a dylib, polling to completion and
+    /// returning the built dylib's filename. Throws with the server's message if there's no iOS SDK (409).
+    static func build(jobID: String, progress: @escaping (String) -> Void) async throws -> String {
+        _ = try await Api.shared.request("POST", "\(base)/jobs/\(jobID)/build")
+        var misses = 0
+        while true {
+            try Task.checkCancellation()
+            try await Task.sleep(nanoseconds: 2_500_000_000)
+            do {
+                let s: BuildState = try await Api.shared.get("\(base)/jobs/\(jobID)/build"); misses = 0
+                if let line = s.log?.last { await MainActor.run { progress(line) } }
+                if s.state == "error" { throw ApiError.server(s.log?.last ?? "Build failed.", 0) }
+                if s.state == "done" { return s.dylibName ?? "built.dylib" }
+            } catch let e as ApiError where e.status == 0 { throw e }
+            catch { misses += 1; if misses > 160 { throw error } }
+        }
+    }
+
+    static func dylibDownloadPath(jobID: String) -> String { "\(base)/jobs/\(jobID)/dylib" }
 }

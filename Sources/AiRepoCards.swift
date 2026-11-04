@@ -122,6 +122,7 @@ struct AiLibrariesCard: View {
 struct AiReconResultsCard: View {
     let results: [ReconResult]
     let onDownload: (ReconResult) -> Void
+    let onEdit: (ReconResult) -> Void
 
     @State private var downloading: String?
 
@@ -136,6 +137,11 @@ struct AiReconResultsCard: View {
                         Text(r.summary).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
                     }
                     Spacer(minLength: 0)
+                    if !r.jobID.isEmpty {
+                        Button { onEdit(r) } label: {
+                            Image(systemName: "pencil.and.outline").foregroundStyle(Color.dtAccent)
+                        }.buttonStyle(.plain)
+                    }
                     if r.downloadPath != nil {
                         Button {
                             downloading = r.dylibName
