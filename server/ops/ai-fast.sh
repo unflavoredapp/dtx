@@ -8,18 +8,19 @@
 #   WORKER_GGUF=/path/small-instruct-q4.gguf   a small model (0.5B-3B, same family as the main one) used as
 #                                              (1) the speculative-decoding draft for the main model, and
 #                                              (2) the "worker" server on :8082 for background chores
+#   WORKERS=4   number of worker processes (ports 8082..8085), each pinned to its own core(s), load-balanced by nginx
 #   NP=2   parallel slots on the main model      PORT_WORKER=8082   BIN=llama-server
 set -euo pipefail
 MODE="${1:-plan}"
 BIN="${BIN:-$(command -v llama-server || true)}"
 [ -n "$BIN" ] || { echo "llama-server not found; run: BIN=/path/to/llama-server bash $0 $MODE"; exit 1; }
-export MODE BIN NP="${NP:-2}" WORKER_GGUF="${WORKER_GGUF:-}" PORT_WORKER="${PORT_WORKER:-8082}"
+export MODE BIN NP="${NP:-2}" WORKER_GGUF="${WORKER_GGUF:-}" PORT_WORKER="${PORT_WORKER:-8082}" WORKERS="${WORKERS:-4}"
 
 python3 - <<'PY'
 import os, re, shlex, subprocess, sys
 
 BIN, MODE, NP = os.environ["BIN"], os.environ["MODE"], int(os.environ["NP"])
-WORKER = os.environ["WORKER_GGUF"]; PORT_W = os.environ["PORT_WORKER"]
+WORKER = os.environ["WORKER_GGUF"]; PORT_W = int(os.environ["PORT_WORKER"]); NW = max(1, int(os.environ["WORKERS"]))
 
 def sh(c):
     return subprocess.run(c, shell=True, capture_output=True, text=True).stdout
@@ -68,9 +69,12 @@ vision = [p for p in procs if "--mmproj" in p or "-mm" in p]
 mains = [p for p in procs if p not in vision]
 
 # split the physical cores: main 60% / vision 20% / worker 20% (at least 1 each)
-n = len(phys); nw = max(1, n // 5) if WORKER else 0; nv = max(1, n // 5) if vision else 0
+n = len(phys)
+NW = min(NW, max(1, n // 3)) if WORKER else 0                       # never starve the main model
+nw = max(NW, n // 5) if WORKER else 0; nv = max(1, n // 5) if vision else 0
 nm = max(1, n - nw - nv)
-main_c, vis_c, wrk_c = phys[:nm], phys[nm:nm + nv], phys[nm + nv:nm + nv + nw]
+main_c, vis_c, wrk_all = phys[:nm], phys[nm:nm + nv], phys[nm + nv:nm + nv + nw]
+wrk_c = [wrk_all[i::NW] for i in range(NW)] if NW else []        # each worker gets its own cores
 def mask(cs): return hex(sum(1 << c for c in cs))
 def perf(cs):
     f = ["-t", str(len(cs)), "-tb", str(len(cs))]
@@ -96,10 +100,11 @@ for i, p in enumerate(mains):
     units["ai-main" + (str(i) if i else "")] = cmd
 for i, p in enumerate(vision):
     units["ai-vision" + (str(i) if i else "")] = drop(p, STRIP) + perf(vis_c) + fa()
-if WORKER:
-    units["ai-worker"] = ["-m", WORKER, "--host", "127.0.0.1", "--port", PORT_W, "-c", "8192", "-np", "2", "--alias", "AiDecryptWorker"] + perf(wrk_c) + fa()
+for i in range(NW):
+    if not wrk_c[i]: continue
+    units[f"ai-worker{i + 1}"] = ["-m", WORKER, "--host", "127.0.0.1", "--port", str(PORT_W + i), "-c", "8192", "-np", "1", "--alias", "AiDecryptWorker"] + perf(wrk_c[i]) + fa()
 
-print(f"\nmain   -> cores {main_c}\nvision -> cores {vis_c}\nworker -> cores {wrk_c}\n")
+print(f"\nmain   -> cores {main_c}\nvision -> cores {vis_c}\nworkers -> {NW} x, cores {wrk_c}\n")
 for name, cmd in units.items():
     print(f"[{name}]\n  {BIN} " + " ".join(shlex.quote(x) for x in cmd) + "\n")
 
@@ -115,6 +120,8 @@ if MODE == "apply":
     print("next: stop your current llama-server (pm2 / systemctl / screen), then:")
     print("  systemctl daemon-reload && systemctl enable --now " + " ".join(units))
     if WORKER:
-        print("\nnginx: next to your /v1vision/ block add the same for the worker, then reload nginx:")
-        print(f"  location /v1worker/ {{ rewrite ^/v1worker/(.*)$ /v1/$1 break; proxy_pass http://127.0.0.1:{PORT_W}; proxy_buffering off; proxy_read_timeout 600s; }}")
+        ups = "\n".join(f"  server 127.0.0.1:{PORT_W + i};" for i in range(NW))
+        print("\nnginx: put the upstream at http{} level and the location next to /v1vision/, then reload nginx:")
+        print(f"upstream aiworkers {{\n  least_conn;\n{ups}\n}}")
+        print("location /v1worker/ { rewrite ^/v1worker/(.*)$ /v1/$1 break; proxy_pass http://aiworkers; proxy_buffering off; proxy_read_timeout 600s; }")
 PY
