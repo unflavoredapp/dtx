@@ -79,10 +79,14 @@ final class Session: ObservableObject {
     /// "signed in as ..." reveal (photo, username, role) before dropping into the main app. Never persisted —
     /// a relaunch of an already-signed-in app goes straight in, this is only for the login moment itself.
     @Published var justSignedIn = false
+    /// "Continue as guest" from the onboarding popup — lets someone browse without a Telegram login. Purely a
+    /// local gate past the onboarding screen: the server still enforces its own guest quotas and staff-only
+    /// checks on every endpoint regardless of this flag, same as it already does for the website's guests.
+    @Published var guestMode = false
 
     var signedIn: Bool { username != nil }
-    /// Closed beta: only signed-in Decrypt.Team staff get past the onboarding screen.
-    var allowed: Bool { signedIn && beta }
+    /// Closed beta for full staff access, but guests can look around too — see `guestMode`.
+    var allowed: Bool { (signedIn && beta) || guestMode }
     private var loginTask: Task<Void, Never>?
     private var nudged = false
 
@@ -90,6 +94,7 @@ final class Session: ObservableObject {
     /// and the check below only confirms it in the background.
     init() {
         let d = UserDefaults.standard
+        guestMode = d.bool(forKey: "dt.me.guest")
         if let name = d.string(forKey: "dt.me.name") {
             username = name
             beta = d.bool(forKey: "dt.me.beta")
@@ -97,7 +102,15 @@ final class Session: ObservableObject {
             role = d.string(forKey: "dt.me.role") ?? (staff ? "staff" : "member")
             photoUrl = d.string(forKey: "dt.me.photo")
             checked = true
+        } else if guestMode {
+            checked = true
         }
+    }
+
+    /// Lets someone past onboarding without signing in. Stays until they sign in for real or sign out.
+    func continueAsGuest() {
+        guestMode = true
+        UserDefaults.standard.set(true, forKey: "dt.me.guest")
     }
 
     private func remember() {
@@ -176,6 +189,7 @@ final class Session: ObservableObject {
         _ = try? await Api.shared.request("POST", "/api/auth/logout", json: [String: Any]())
         for c in HTTPCookieStorage.shared.cookies ?? [] { HTTPCookieStorage.shared.deleteCookie(c) }
         username = nil; beta = false; staff = false; role = "member"; photoUrl = nil; phase = .idle; justSignedIn = false
+        guestMode = false; UserDefaults.standard.removeObject(forKey: "dt.me.guest")
         remember()
     }
 

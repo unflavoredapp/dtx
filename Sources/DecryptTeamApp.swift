@@ -33,8 +33,6 @@ struct RootView: View {
                 ZStack { AppBackground(); ProgressView() }
             } else if !session.allowed {
                 OnboardingView()
-            } else if session.justSignedIn {
-                WelcomeView()
             } else if chatOnly {
                 chatHome
             } else {
@@ -51,8 +49,10 @@ struct RootView: View {
             live.confirmHealthy()
         }
         .animation(.easeInOut(duration: 0.25), value: session.allowed)
-        .animation(.easeInOut(duration: 0.25), value: session.justSignedIn)
         .onChange(of: scenePhase) { phase in if phase == .active { session.nudge(); if session.allowed { Task { await live.syncIfDue() } } } }
+        // Pops up over whatever screen is already loading underneath, right after a Telegram login succeeds —
+        // never a separate full screen, so the app behind it is already settling in while this shows.
+        .overlay { if session.justSignedIn { WelcomePopup().environmentObject(session) } }
     }
 
     private var chatHome: some View {
