@@ -509,10 +509,10 @@ final class AiDecryptViewModel: ObservableObject {
             var body = m.content
             if let t = m.gifTitle, m.gifURL != nil { body += (body.isEmpty ? "" : " ") + "[GIF: \(t)]" }
             guard !body.isEmpty else { return nil }
-            return (m.role == .user ? "You" : "Ai-Decrypt") + ":\n" + body
+            return (m.role == .user ? "You" : "Uncrypt") + ":\n" + body
         }
         guard !lines.isEmpty else { return nil }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Ai-Decrypt chat.txt")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Uncrypt chat.txt")
         try? lines.joined(separator: "\n\n").write(to: url, atomically: true, encoding: .utf8)
         return url
     }
@@ -1278,9 +1278,8 @@ final class AiDecryptViewModel: ObservableObject {
 // MARK: - Chat view
 
 struct AiDecryptChatView: View {
-    /// true when the chat IS the home screen (no sheet to close); false when opened as a sheet from the full app
+    /// true when the chat IS the home screen (no sheet to close); false when opened as a sheet
     var embedded = false
-    @AppStorage("dtx.chatOnly") private var chatOnly = true
     @StateObject private var viewModel = AiDecryptViewModel()
     @EnvironmentObject private var store: RepoStore
     @Environment(\.dismiss) private var dismiss
@@ -1311,12 +1310,7 @@ struct AiDecryptChatView: View {
                     vm: viewModel,
                     onClose: { setSidebar(false) },
                     onColorWheel: { setSidebar(false); viewModel.showColorWheel() },
-                    onGif: { setSidebar(false); DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { showGifPicker = true } },
-                    leaveTitle: embedded ? "Open full app" : "Make chat the home screen",
-                    leaveIcon: embedded ? "square.grid.2x2" : "house",
-                    onLeave: {
-                        if embedded { chatOnly = false } else { chatOnly = true; dismiss() }
-                    }
+                    onGif: { setSidebar(false); DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { showGifPicker = true } }
                 )
                 .frame(width: sw)
 
@@ -1655,7 +1649,7 @@ struct AiDecryptChatView: View {
             }
 
             if viewModel.thinkHarder { Image(systemName: "brain").font(.system(size: 15)).foregroundStyle(Color.dtAccent) }
-            TextField("Message Ai-Decrypt", text: $viewModel.draft, axis: .vertical)
+            TextField("Message Uncrypt", text: $viewModel.draft, axis: .vertical)
                 .font(.system(size: 17))
                 .foregroundStyle(.white)
                 .lineLimit(1...6)

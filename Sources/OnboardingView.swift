@@ -26,7 +26,7 @@ struct OnboardingView: View {
                 .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Color.dtLine))
             VStack(spacing: 6) {
                 Text("Uncrypt").font(.title2.bold())
-                Text("Ai-Decrypt is an AI chat built into the app — it finds and decrypts apps, inspects crashes, and writes dylibs with you. Staff get full access — sign in with Telegram, or look around as a guest.")
+                Text("Uncrypt is the chat built into the app — it finds and decrypts apps, inspects crashes, and writes dylibs with you. Staff get full access — sign in with Telegram, or look around as a guest.")
                     .font(.subheadline).multilineTextAlignment(.center).foregroundStyle(.secondary)
             }
             status
@@ -51,9 +51,6 @@ struct OnboardingView: View {
         }
         .padding(.horizontal, 22).padding(.top, 26).padding(.bottom, 22)
         .frame(maxWidth: 340)
-        .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color(white: 0.07)))
-        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(Color.dtLine))
-        .shadow(color: .black.opacity(0.4), radius: 30, y: 12)
         .padding(.horizontal, 28)
     }
 
@@ -108,9 +105,6 @@ struct WelcomePopup: View {
         }
         .padding(.horizontal, 20).padding(.top, 22).padding(.bottom, 20)
         .frame(maxWidth: 340)
-        .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color(white: 0.07)))
-        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(Color.dtLine))
-        .shadow(color: .black.opacity(0.4), radius: 30, y: 12)
         .padding(.horizontal, 28)
     }
 

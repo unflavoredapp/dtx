@@ -278,7 +278,7 @@ struct ReconFileEditor: View {
                 Button { Task { await openDiff() } } label: { Label("Diff vs generated", systemImage: "plus.forwardslash.minus") }
                 Button { sheet = .problems } label: { Label("Problems (\(problemCount))", systemImage: "exclamationmark.triangle") }
                 Button { sheet = .evidence } label: { Label("Function evidence", systemImage: "gauge.with.dots.needle.67percent") }
-                Button { Task { await openAI() } } label: { Label("Ask Ai-Decrypt…", systemImage: "sparkles") }
+                Button { Task { await openAI() } } label: { Label("Ask Uncrypt…", systemImage: "sparkles") }
                 Button { showGoTo = true } label: { Label("Go to line…", systemImage: "arrow.down.to.line") }
             } label: {
                 Image(systemName: errorCount > 0 ? "exclamationmark.circle.fill" : "ellipsis.circle")
@@ -462,7 +462,7 @@ struct ReconFileEditor: View {
         initialText = t
         if let b = try? await ReconstructAPI.original(jobID: jobID, path: path) { serverBaseline = b }
         savedEdit = serverBaseline != nil && serverBaseline != t
-        status = "Updated by Ai-Decrypt."
+        status = "Updated by Uncrypt."
         await loadDiag()
     }
 

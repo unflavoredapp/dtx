@@ -44,7 +44,7 @@ struct HomeView: View {
                     .background(LinearGradient(colors: [Color(red: 0.941, green: 0.518, blue: 0.173), Color(red: 0.541, green: 0.239, blue: 0.059)], startPoint: .topLeading, endPoint: .bottomTrailing))
                     .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Ai-Decrypt").font(.subheadline.weight(.bold)).foregroundStyle(.white)
+                    Text("Uncrypt").font(.subheadline.weight(.bold)).foregroundStyle(.white)
                     Text("Chat with your AI assistant").font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)

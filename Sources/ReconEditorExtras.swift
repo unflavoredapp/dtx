@@ -352,7 +352,7 @@ struct ReconEvidenceView: View {
                                             }
                                         }
                                         if let ask = onAsk {
-                                            Button { ask(f) } label: { Label("Ask Ai-Decrypt about this", systemImage: "sparkles") }
+                                            Button { ask(f) } label: { Label("Ask Uncrypt about this", systemImage: "sparkles") }
                                                 .font(.caption.bold())
                                         }
                                         if f.file != nil {

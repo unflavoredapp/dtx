@@ -23,9 +23,6 @@ struct RootView: View {
     @EnvironmentObject var session: Session
     @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var live = LiveSync.shared
-    @ObservedObject private var userTheme = UserTheme.shared
-    /// the app opens straight into Ai-Decrypt; the tabs are still there (chat sidebar → Open full app)
-    @AppStorage("dtx.chatOnly") private var chatOnly = true
 
     var body: some View {
         Group {
@@ -33,10 +30,8 @@ struct RootView: View {
                 ZStack { AppBackground(); ProgressView() }
             } else if !session.allowed {
                 OnboardingView()
-            } else if chatOnly {
-                chatHome
             } else {
-                mainTabs
+                chatHome
             }
         }
         .task { await session.refresh() }
@@ -68,39 +63,5 @@ struct RootView: View {
                 }
                 .preferredColorScheme(.dark)
             }
-    }
-
-    private var mainTabs: some View {
-        ZStack(alignment: .bottom) {
-            AppBackground()
-            // every tab stays alive, so a search or a half-filled form is still there when you come back
-            screen(.home) { HomeView() }
-            screen(.search) { SearchView() }
-            screen(.repos) { ReposView() }
-            screen(.signed) { SignedView() }
-            screen(.settings) { SettingsView() }
-            FloatingTabBar()
-        }
-        // rebuilt when the accent changes (a live release, or the person asking Ai-Decrypt). The sheets below sit outside
-        // this identity so an open chat is not dismissed by its own colour change.
-        .id("\(live.themeRev).\(userTheme.rev)")
-        .sheet(isPresented: $store.showQuickBuild) { QuickBuildView() }
-        .sheet(isPresented: $store.showTools) { ToolsHubView() }
-        .sheet(isPresented: $store.showAiDecrypt) { AiDecryptChatView().environmentObject(store).environmentObject(session) }
-        .sheet(item: $store.pickedApp) { app in
-            NavigationStack {
-                AppDetailView(app: app)
-                    .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Close") { store.pickedApp = nil } } }
-            }
-            .preferredColorScheme(.dark)
-        }
-    }
-
-    private func screen<V: View>(_ tab: AppTab, @ViewBuilder _ content: () -> V) -> some View {
-        content()
-            .safeAreaInset(edge: .bottom, spacing: 0) { Color.clear.frame(height: 84) }
-            .opacity(store.tab == tab ? 1 : 0)
-            .allowsHitTesting(store.tab == tab)
-            .accessibilityHidden(store.tab != tab)
     }
 }

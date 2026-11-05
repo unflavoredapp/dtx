@@ -444,7 +444,7 @@ struct ReconAIView: View {
                 inputBar
             }
             .background(Color.black)
-            .navigationTitle("Ai-Decrypt")
+            .navigationTitle("Uncrypt")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } }
@@ -578,7 +578,7 @@ struct ReconAIView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 5) {
                 Image(systemName: b.isError ? "exclamationmark.triangle.fill" : "sparkle").font(.caption2)
-                Text(b.isError ? "Problem" : "Ai-Decrypt").font(.caption2.weight(.semibold))
+                Text(b.isError ? "Problem" : "Uncrypt").font(.caption2.weight(.semibold))
             }
             .foregroundStyle(b.isError ? Color.red : Color.dtAccent)
 

@@ -18,9 +18,6 @@ enum AiPrefs {
 /// endpoints and stores: /api/auth/me (account), the live-update + plugins centres, /api/changelog, and the server address.
 struct AiSettingsView: View {
     @ObservedObject var vm: AiDecryptViewModel
-    let leaveTitle: String
-    let leaveIcon: String
-    let onLeave: () -> Void
 
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var store: RepoStore
@@ -57,7 +54,7 @@ struct AiSettingsView: View {
                     avatar.padding(.top, 54)
                     planCard.padding(.top, 22)
 
-                    section("Customize Ai-Decrypt") {
+                    section("Customize Uncrypt") {
                         row("face.smiling", "Personalization") { sheet = .personal }
                         row("book.closed", "Memory") { sheet = .memory }
                         row("puzzlepiece.extension", "Plugins") { sheet = .plugins }
@@ -81,7 +78,6 @@ struct AiSettingsView: View {
                     section("App") {
                         row("arrow.triangle.2.circlepath", "Live update",
                             value: live.updateAvailable ? "Release \(live.manifest?.rev ?? 0) ready" : "Release #\(live.rev)") { sheet = .updates }
-                        row(leaveIcon, leaveTitle) { dismiss(); onLeave() }
                     }
                     section("Get help") {
                         row("doc.text", "Changelog") { sheet = .changelog }
@@ -141,16 +137,16 @@ struct AiSettingsView: View {
             Circle().fill(Color.dtAccent.opacity(0.32))
                 .frame(width: 150, height: 150)
                 .overlay(Text(initials).font(.system(size: 56, weight: .semibold)).foregroundStyle(.white.opacity(0.92)))
-            Text(name).font(.system(size: 26, weight: .bold)).foregroundStyle(.white)
+            Text(name).font(.system(size: 26, weight: .bold)).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.7)
         }
     }
 
     private var planCard: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(session.staff ? "No limits" : "Closed beta").font(.system(size: 22, weight: .semibold)).foregroundStyle(.white)
+                Text(session.staff ? "No limits" : "Closed beta").font(.system(size: 22, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
                 Text(session.staff ? "Staff access: unlimited tokens, every tool." : "Signed in to Uncrypt.")
-                    .font(.system(size: 16)).foregroundStyle(.secondary)
+                    .font(.system(size: 16)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.85)
             }
             Spacer(minLength: 8)
             Button { sheet = .updates } label: {
@@ -179,7 +175,7 @@ struct AiSettingsView: View {
         VStack(spacing: 0) {
             HStack(spacing: 16) {
                 Image(systemName: icon).font(.system(size: 21)).foregroundStyle(.white).frame(width: 30)
-                Text(title).font(.system(size: 20)).foregroundStyle(.white)
+                Text(title).font(.system(size: 20)).foregroundStyle(.white).lineLimit(1).minimumScaleFactor(0.8).layoutPriority(1)
                 Spacer(minLength: 8)
                 trailing
             }
@@ -191,7 +187,7 @@ struct AiSettingsView: View {
     private func row(_ icon: String, _ title: String, value: String? = nil, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             line(icon, title, trailing: HStack(spacing: 8) {
-                if let value { Text(value).font(.system(size: 19)).foregroundStyle(.secondary).lineLimit(1) }
+                if let value { Text(value).font(.system(size: 19)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8) }
                 Image(systemName: "chevron.right").font(.system(size: 16, weight: .semibold)).foregroundStyle(Color(white: 0.45))
             })
             .contentShape(Rectangle())
@@ -200,14 +196,14 @@ struct AiSettingsView: View {
     }
 
     private func valueRow(_ icon: String, _ title: String, _ value: String) -> some View {
-        line(icon, title, trailing: Text(value).font(.system(size: 19)).foregroundStyle(.secondary).lineLimit(1))
+        line(icon, title, trailing: Text(value).font(.system(size: 19)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8))
     }
 
     private var serverRow: some View {
         line("server.rack", "Server", trailing:
             TextField("https://decrypt.team", text: $store.server)
                 .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
-                .multilineTextAlignment(.trailing)
+                .multilineTextAlignment(.trailing).lineLimit(1)
                 .font(.system(size: 17)).foregroundStyle(.secondary)
                 .frame(maxWidth: 190))
     }
@@ -233,7 +229,7 @@ struct AiSettingsView: View {
             } label: {
                 HStack(spacing: 8) {
                     Circle().fill(Color.dtAccent).frame(width: 16, height: 16)
-                    Text(accentName).font(.system(size: 19)).foregroundStyle(.secondary)
+                    Text(accentName).font(.system(size: 19)).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
                     Image(systemName: "chevron.up.chevron.down").font(.system(size: 13, weight: .semibold)).foregroundStyle(Color(white: 0.55))
                 }
             })
@@ -290,7 +286,7 @@ struct AiSettingsView: View {
                     kv("Your cap", session.staff ? "none (unlimited)" : "none in the beta")
                     kv("Model context window", fmtTok(AiDecryptAPI.contextWindow) + " tokens")
                 }
-                Section(footer: Text("Long chats are folded into a running summary automatically, so Ai-Decrypt keeps remembering past the context window.")) { EmptyView() }
+                Section(footer: Text("Long chats are folded into a running summary automatically, so Uncrypt keeps remembering past the context window.")) { EmptyView() }
             }
             .scrollContentBackground(.hidden)
             .background(AppBackground())
@@ -310,7 +306,7 @@ struct AiSettingsView: View {
                 Image("Logo").resizable().frame(width: 96, height: 96).clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous)).padding(.top, 24)
                 (Text("Un").foregroundColor(.white) + Text("crypt").foregroundColor(.dtAccent)).font(.title.bold())
                 Text("Version \(version)").foregroundStyle(.secondary)
-                Text("Ai-Decrypt, the Uncrypt assistant. Decrypting, building and the AI run on the Uncrypt server; this app is the screen for them.")
+                Text("Uncrypt, the assistant built into the app. Decrypting, building and the AI run on the Uncrypt server; this app is the screen for them.")
                     .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.horizontal, 24)
                 Spacer()
             }

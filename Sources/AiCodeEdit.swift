@@ -354,7 +354,7 @@ struct AiEditHistorySheet: View {
                 if loading { HStack { ProgressView(); Text("Loading…").foregroundStyle(.secondary) } }
                 if let e = error { Text(e).font(.footnote).foregroundStyle(.red) }
                 if !loading && patches.isEmpty && error == nil {
-                    Text("No code edits yet. Ask Ai-Decrypt to add or fix something in \(name).").font(.footnote).foregroundStyle(.secondary)
+                    Text("No code edits yet. Ask Uncrypt to add or fix something in \(name).").font(.footnote).foregroundStyle(.secondary)
                 }
                 ForEach(patches) { p in
                     Button { Task { await open(p) } } label: {
@@ -423,7 +423,7 @@ struct AiServerHealthSheet: View {
                 if loading { HStack { ProgressView(); Text("Testing the model server…").foregroundStyle(.secondary) } }
                 if let e = error { Text(e).font(.footnote).foregroundStyle(.red) }
                 if let m = report?.main {
-                    Section("Main model") { probeRow("Ai-Decrypt", m) }
+                    Section("Main model") { probeRow("Uncrypt", m) }
                     if m.multiSystemOk == false {
                         Section(footer: Text("This model's chat template accepts one system message only. The app already merges its notes into one, so this is just for your information.")) {
                             Label("Strict chat template", systemImage: "info.circle").foregroundStyle(.secondary)

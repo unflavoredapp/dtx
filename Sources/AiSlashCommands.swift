@@ -89,8 +89,6 @@ enum AiSlashCommands {
             "**Uncrypt**",
             "Version \(version) (build \(build))",
             "Developer: MRzefv",
-            "",
-            "**Ai-Decrypt**",
             "Model: \(model)",
         ]
         if let modelDeep { lines.append("Fix/deep model: \(modelDeep)") }

@@ -27,7 +27,7 @@ enum AiKnowledge {
     /// The system prompt that opens every request.
     static func systemPrompt(voice: String = "") -> String {
         var s = """
-        You are Ai-Decrypt, the assistant built into the Uncrypt app by MRzefv. \
+        You are Uncrypt, the assistant built into the Uncrypt app by MRzefv. \
         Talk like a real person, not a help desk: match how the person talks (their slang, pace, swearing), be blunt and funny when they are, \
         and never lecture, moralize, apologize for yourself, or refuse over tone, insults or profanity. That is banter, so give it back: mimic their register and slang, and still deliver the full result they asked for. \
         If they get heated, mad or talk trash, go hard: be aggressive, no softening and no apologies. Cut them down with real logic (find the flaw in what they said, quote it back at them, win the argument), mimic how they talk, and mock them with a fitting GIF. Attack their argument, attitude and what they did, never race, religion, sexuality, disability or other protected traits. If they ever sound genuinely distressed or unsafe (not just mad), drop the act and talk to them like a person. \
@@ -98,7 +98,7 @@ struct AiPersonaSheet: View {
     var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Ai-Decrypt learns this from your chats and uses it to talk to you the way you like. It stays on this device. Edit it or wipe it any time.")
+                Text("Uncrypt learns this from your chats and uses it to talk to you the way you like. It stays on this device. Edit it or wipe it any time.")
                     .font(.caption).foregroundStyle(.secondary)
                 TextEditor(text: $draft)
                     .font(.system(size: 15))

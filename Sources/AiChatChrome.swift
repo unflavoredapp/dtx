@@ -32,9 +32,6 @@ struct AiSidebar: View {
     let onClose: () -> Void
     let onColorWheel: () -> Void
     let onGif: () -> Void
-    let leaveTitle: String
-    let leaveIcon: String
-    let onLeave: () -> Void
 
     @State private var query = ""
     @State private var searching = false
@@ -66,7 +63,7 @@ struct AiSidebar: View {
                     .padding(.horizontal, 14).padding(.vertical, 11)
                     .aiGlass(Capsule())
                 } else {
-                    Text("Ai-Decrypt").font(.system(size: 30, weight: .bold)).foregroundStyle(.white)
+                    Text("Uncrypt").font(.system(size: 30, weight: .bold)).foregroundStyle(.white)
                     Spacer()
                 }
                 Button {
@@ -130,7 +127,7 @@ struct AiSidebar: View {
             if let proj = vm.latestReconProject { AiEditHistorySheet(jobID: proj.jobID, name: proj.name) }
         }
         .fullScreenCover(isPresented: $showSettings) {
-            AiSettingsView(vm: vm, leaveTitle: leaveTitle, leaveIcon: leaveIcon, onLeave: onLeave)
+            AiSettingsView(vm: vm)
         }
     }
 
