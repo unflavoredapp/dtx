@@ -53,7 +53,7 @@ final class Api {
 // MARK: - Signed-in user
 
 struct MeReply: Decodable {
-    struct User: Decodable { var username: String?; var staff: Bool?; var beta: Bool? }
+    struct User: Decodable { var username: String?; var staff: Bool?; var beta: Bool?; var role: String?; var photoUrl: String? }
     var user: User?
 }
 
@@ -69,8 +69,16 @@ final class Session: ObservableObject {
     @Published var username: String?
     @Published var beta = false
     @Published var staff = false
+    /// "admin", "staff" or "member" — mirrors the server's role column (admin implies staff there too).
+    @Published var role = "member"
+    /// Relative or absolute URL for the signed-in person's Telegram profile photo; nil if none is cached yet.
+    @Published var photoUrl: String?
     @Published var checked = false
     @Published var phase: LoginPhase = .idle
+    /// True for the moment right after a Telegram login succeeds, so the app can show a one-screen
+    /// "signed in as ..." reveal (photo, username, role) before dropping into the main app. Never persisted —
+    /// a relaunch of an already-signed-in app goes straight in, this is only for the login moment itself.
+    @Published var justSignedIn = false
 
     var signedIn: Bool { username != nil }
     /// Closed beta: only signed-in Decrypt.Team staff get past the onboarding screen.
@@ -86,14 +94,21 @@ final class Session: ObservableObject {
             username = name
             beta = d.bool(forKey: "dt.me.beta")
             staff = d.bool(forKey: "dt.me.staff")
+            role = d.string(forKey: "dt.me.role") ?? (staff ? "staff" : "member")
+            photoUrl = d.string(forKey: "dt.me.photo")
             checked = true
         }
     }
 
     private func remember() {
         let d = UserDefaults.standard
-        if let username { d.set(username, forKey: "dt.me.name"); d.set(beta, forKey: "dt.me.beta"); d.set(staff, forKey: "dt.me.staff") }
-        else { for k in ["dt.me.name", "dt.me.beta", "dt.me.staff"] { d.removeObject(forKey: k) } }
+        if let username {
+            d.set(username, forKey: "dt.me.name"); d.set(beta, forKey: "dt.me.beta"); d.set(staff, forKey: "dt.me.staff")
+            d.set(role, forKey: "dt.me.role")
+            if let photoUrl { d.set(photoUrl, forKey: "dt.me.photo") } else { d.removeObject(forKey: "dt.me.photo") }
+        } else {
+            for k in ["dt.me.name", "dt.me.beta", "dt.me.staff", "dt.me.role", "dt.me.photo"] { d.removeObject(forKey: k) }
+        }
     }
 
     func refresh() async {
@@ -102,10 +117,14 @@ final class Session: ObservableObject {
             username = me.user?.username
             beta = me.user?.beta ?? false
             staff = me.user?.staff ?? false
+            role = me.user?.role ?? (staff ? "staff" : "member")
+            photoUrl = me.user?.photoUrl
             remember()
         } catch {
             // no answer (offline, slow server): keep what we remembered; a stranger just sees the onboarding screen
-            if case ApiError.server(_, let code) = error, code == 401 { username = nil; beta = false; staff = false; remember() }
+            if case ApiError.server(_, let code) = error, code == 401 {
+                username = nil; beta = false; staff = false; role = "member"; photoUrl = nil; remember()
+            }
         }
         checked = true
     }
@@ -131,6 +150,7 @@ final class Session: ObservableObject {
                     let p: TgPoll = try await Api.shared.get("/api/auth/telegram/poll?token=" + q)
                     if p.status == "done" {
                         await self.refresh()
+                        if self.allowed { self.justSignedIn = true }
                         self.phase = self.allowed ? .idle : .denied("This account isn't on the Decrypt.Team staff list.")
                         return
                     }
@@ -155,8 +175,15 @@ final class Session: ObservableObject {
     func signOut() async {
         _ = try? await Api.shared.request("POST", "/api/auth/logout", json: [String: Any]())
         for c in HTTPCookieStorage.shared.cookies ?? [] { HTTPCookieStorage.shared.deleteCookie(c) }
-        username = nil; beta = false; staff = false; phase = .idle
+        username = nil; beta = false; staff = false; role = "member"; photoUrl = nil; phase = .idle; justSignedIn = false
         remember()
+    }
+
+    /// Absolute URL for `photoUrl` (the server returns it relative), or nil if there's nothing to show.
+    var photoURL: URL? {
+        guard let photoUrl, !photoUrl.isEmpty else { return nil }
+        if photoUrl.hasPrefix("http") { return URL(string: photoUrl) }
+        return URL(string: Api.shared.base + photoUrl)
     }
 }
 
