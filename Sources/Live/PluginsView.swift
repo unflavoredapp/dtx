@@ -135,6 +135,7 @@ struct PluginControllerView: View {
                 if let liveInfo { kv("From the manifest", liveInfo) }
                 kv("Runs", tool.origin == .server ? "On the server (needs sign-in)" : "On this phone")
                 kv("Default", tool.auto ? "Runs automatically" : "Runs when you tap Run")
+                kv("Capabilities", tool.capabilities.isEmpty ? "None declared — matched by keyword" : tool.capabilities.joined(separator: ", "))
             }.listRowBackground(Color.white.opacity(0.06))
             if !tool.options.isEmpty {
                 Section {
