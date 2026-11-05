@@ -26,6 +26,7 @@ struct Recipe: Decodable {
     var icon: String?
     var mode: String?
     var version: String?
+    var capabilities: [String]?
     var options: [PluginOption]?
     var steps: [Step]
     var output: [Out]
@@ -38,7 +39,8 @@ enum RecipeStore {
         guard let r: List = try? await Api.shared.get("/api/recipes") else { return [] }
         return (r.items ?? []).compactMap { $0.value }.map { rec in
             Tool(id: "recipe-" + rec.id, name: rec.name, summary: rec.summary ?? "", icon: rec.icon ?? "doc.text.magnifyingglass", origin: .recipe,
-                 options: rec.options ?? [], auto: rec.mode == "background", version: rec.version ?? "", run: { ctx in try await RecipeRunner.run(rec, ctx) })
+                 capabilities: rec.capabilities ?? [], options: rec.options ?? [], auto: rec.mode == "background", version: rec.version ?? "",
+                 run: { ctx in try await RecipeRunner.run(rec, ctx) })
         }
     }
 }

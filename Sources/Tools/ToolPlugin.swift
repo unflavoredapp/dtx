@@ -31,6 +31,11 @@ struct Tool: Identifiable {
     let summary: String
     let icon: String                 // an SF Symbol
     let origin: Origin
+    /// Short tags ("dylib", "objc", "binary-analysis", …) a recipe or server tool can declare so the app can pick
+    /// tools by what they're FOR instead of guessing from the name/summary. Empty for anything that hasn't
+    /// declared any yet (every bundled tool, and older recipes/server tools) — isDylibTool below falls back to
+    /// a keyword match in that case.
+    var capabilities: [String] = []
     var options: [PluginOption] = []
     /// Runs by itself in the background when an app opens (the person can switch this per tool).
     var auto: Bool = false
@@ -39,9 +44,15 @@ struct Tool: Identifiable {
     let run: (ToolContext) async throws -> [PluginSection]
 }
 
-/// Whether a tool (bundled, recipe, or server) is aimed at dylibs/frameworks/the binary itself, going only by
-/// its id/name/summary — there's no separate tagging system, so this is a plain keyword match.
+/// Whether a tool (bundled, recipe, or server) is aimed at dylibs/frameworks/the binary itself. Prefers the
+/// tool's own declared `capabilities` tags when it has any; falls back to a plain keyword match in its
+/// id/name/summary for the ones that haven't declared tags (every bundled tool, older recipes/server tools).
 func isDylibTool(_ t: Tool) -> Bool {
+    if !t.capabilities.isEmpty {
+        return t.capabilities.contains { cap in
+            cap == "dylib" || cap == "objc" || cap.contains("binary") || cap.contains("librar") || cap.contains("framework")
+        }
+    }
     let s = (t.id + " " + t.name + " " + t.summary).lowercased()
     return s.contains("dylib") || s.contains("binary") || s.contains("librar") || s.contains("framework")
 }

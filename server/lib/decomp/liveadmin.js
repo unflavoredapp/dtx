@@ -82,6 +82,12 @@ function cleanRecipe(r, warn) {
   if (typeof r.name !== 'string' || !r.name.trim()) { warn.push('A recipe needs a name'); return null; }
   const o = { id: r.id, name: cut(r.name.trim(), 60), summary: cut(r.summary, 200), icon: symOk(r.icon) ? r.icon : 'doc.text.magnifyingglass', version: cut(r.version || '1.0', 16) };
   if (r.mode) warn.push('Recipes written by the AI never run automatically; "mode" was dropped');
+  // Short tags (e.g. "dylib", "objc", "binary-analysis") so the app can pick tools by what they're FOR
+  // instead of guessing from the name/summary. Free-form but capped: 1-6 tags, each 1-24 lowercase letters/digits/dashes.
+  const capabilities = uniq((Array.isArray(r.capabilities) ? r.capabilities : [])
+    .filter((c) => typeof c === 'string' && /^[a-z0-9-]{1,24}$/.test(c)).slice(0, 6));
+  if (r.capabilities && !capabilities.length) warn.push('"capabilities" must be short lowercase tags (letters, digits, dashes) and was dropped');
+  if (capabilities.length) o.capabilities = capabilities;
   const options = [];
   for (const x of (Array.isArray(r.options) ? r.options : []).slice(0, 8)) {
     if (!x || !/^[a-zA-Z]{1,24}$/.test(x.key || '')) { warn.push('An option key must be 1-24 letters and was dropped'); continue; }
@@ -301,8 +307,9 @@ module.exports = function mount({ app, express, guard, audit }) {
     const warnings = [], rec = cleanRecipe(body && body.recipe, warnings);
     if (!rec) return { error: warnings[0] || 'That recipe is not valid.', warnings };
     const old = rawOf(rec.id); let oldV = null; try { oldV = old ? JSON.parse(old).version || '1.0' : null; } catch {}
-    return { recipe: rec, warnings: uniq(warnings).slice(0, 10), exists: !!old, existingVersion: oldV, hash: old ? sha(old) : '',
-      lines: [`${rec.steps.length} step(s): ${rec.steps.map((x) => x.op + ' ' + (x.file || x.match)).join(', ').slice(0, 200)}`, `${rec.output.length} output section(s): ${rec.output.map((x) => x.kind + (x.title ? ' "' + x.title + '"' : '')).join(', ').slice(0, 200)}`] };
+    const lines = [`${rec.steps.length} step(s): ${rec.steps.map((x) => x.op + ' ' + (x.file || x.match)).join(', ').slice(0, 200)}`, `${rec.output.length} output section(s): ${rec.output.map((x) => x.kind + (x.title ? ' "' + x.title + '"' : '')).join(', ').slice(0, 200)}`];
+    if (rec.capabilities && rec.capabilities.length) lines.push(`Capabilities: ${rec.capabilities.join(', ')}`);
+    return { recipe: rec, warnings: uniq(warnings).slice(0, 10), exists: !!old, existingVersion: oldV, hash: old ? sha(old) : '', lines };
   }
   app.post(`${B}/recipes/draft`, guard, express.json({ limit: '48kb' }), (req, res) => {
     noStore(res);

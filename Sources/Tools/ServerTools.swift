@@ -11,7 +11,8 @@ enum ServerTools {
         do {
             let r: PluginList = try await Api.shared.get("/api/plugins")
             let tools = (r.items ?? []).map { p in
-                Tool(id: "server-" + p.id, name: p.name, summary: p.description, icon: "server.rack", origin: .server, options: p.options, version: p.version,
+                Tool(id: "server-" + p.id, name: p.name, summary: p.description, icon: "server.rack", origin: .server,
+                     capabilities: p.capabilities, options: p.options, version: p.version,
                      run: { ctx in try await run(p, ctx) })
             }
             return (tools, .ok(tools.count))

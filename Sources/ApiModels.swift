@@ -123,7 +123,10 @@ struct PluginInfo: Decodable, Identifiable {
     var description: String
     var version: String
     var options: [PluginOption]
-    enum K: String, CodingKey { case id, name, description, options, version }
+    /// Short tags ("dylib", "objc", "binary-analysis", …) the server can attach so the app picks tools by what
+    /// they're for instead of guessing from the name/description. Empty until the server starts sending them.
+    var capabilities: [String]
+    enum K: String, CodingKey { case id, name, description, options, version, capabilities }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: K.self)
         id = c.flexString(.id) ?? ""
@@ -131,6 +134,7 @@ struct PluginInfo: Decodable, Identifiable {
         description = c.flexString(.description) ?? ""
         version = c.flexString(.version) ?? ""
         options = (try? c.decodeIfPresent([Lossy<PluginOption>].self, forKey: .options))?.compactMap { $0.value } ?? []
+        capabilities = (try? c.decodeIfPresent([String].self, forKey: .capabilities)) ?? []
     }
 }
 
