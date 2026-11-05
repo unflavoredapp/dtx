@@ -21,7 +21,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     header("GENERAL")
                     row("info", "About", "App information and version") { showAbout = true }
-                    row("doc.text.fill", "Changelog", "What changed in UNCONNECT") { showChangelog = true }
+                    row("doc.text.fill", "Changelog", "What changed in Uncrypt") { showChangelog = true }
 
                     header("PLUGINS & UPDATES")
                     row("arrow.triangle.2.circlepath", "Live Update", live.updateAvailable ? "Release \(live.manifest?.rev ?? 0) is available" : (live.rev == 0 ? "Runtime \(Runtime.version) · tap to sync" : "Runtime \(Runtime.version) · release #\(live.rev)")) { showUpdates = true }
@@ -51,7 +51,7 @@ struct SettingsView: View {
                 .padding(.horizontal, 14).padding(.bottom, 24)
             }
             .background(AppBackground())
-            .withTopBar(.settings, title: "Settings", actions: [.label("UNCONNECT " + version)])
+            .withTopBar(.settings, title: "Settings", actions: [.label("Uncrypt " + version)])
             .sheet(isPresented: $showChangelog) { ChangelogView() }
             .sheet(isPresented: $showUpdates) { UpdateCenterView() }
             .sheet(isPresented: $showPlugins) { PluginsTableView() }
@@ -98,9 +98,9 @@ struct SettingsView: View {
         NavigationStack {
             VStack(spacing: 14) {
                 Image("Logo").resizable().frame(width: 96, height: 96).clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous)).padding(.top, 24)
-                (Text("UN").foregroundColor(.white) + Text("CONNECT").foregroundColor(.dtAccent)).font(.title.bold())
+                (Text("Un").foregroundColor(.white) + Text("crypt").foregroundColor(.dtAccent)).font(.title.bold())
                 Text("Version \(version)").foregroundStyle(.secondary)
-                Text("A closed-beta companion for UNCONNECT staff. Decrypting and building run on the UNCONNECT server; this app only shows the screens. Builds are unsigned, so sign them with your own certificate to install.")
+                Text("A closed-beta companion for Uncrypt staff. Decrypting and building run on the Uncrypt server; this app only shows the screens. Builds are unsigned, so sign them with your own certificate to install.")
                     .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.horizontal, 24)
                 Spacer()
             }

@@ -149,7 +149,7 @@ struct AiSettingsView: View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(session.staff ? "No limits" : "Closed beta").font(.system(size: 22, weight: .semibold)).foregroundStyle(.white)
-                Text(session.staff ? "Staff access: unlimited tokens, every tool." : "Signed in to UNCONNECT.")
+                Text(session.staff ? "Staff access: unlimited tokens, every tool." : "Signed in to Uncrypt.")
                     .font(.system(size: 16)).foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
@@ -308,9 +308,9 @@ struct AiSettingsView: View {
         NavigationStack {
             VStack(spacing: 14) {
                 Image("Logo").resizable().frame(width: 96, height: 96).clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous)).padding(.top, 24)
-                (Text("UN").foregroundColor(.white) + Text("CONNECT").foregroundColor(.dtAccent)).font(.title.bold())
+                (Text("Un").foregroundColor(.white) + Text("crypt").foregroundColor(.dtAccent)).font(.title.bold())
                 Text("Version \(version)").foregroundStyle(.secondary)
-                Text("Ai-Decrypt, the UNCONNECT assistant. Decrypting, building and the AI run on the UNCONNECT server; this app is the screen for them.")
+                Text("Ai-Decrypt, the Uncrypt assistant. Decrypting, building and the AI run on the Uncrypt server; this app is the screen for them.")
                     .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.horizontal, 24)
                 Spacer()
             }

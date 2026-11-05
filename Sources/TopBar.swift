@@ -16,7 +16,7 @@ struct TopBar: View {
     @EnvironmentObject var store: RepoStore
     @EnvironmentObject var session: Session
     let tab: AppTab
-    /// nil shows the UNCONNECT name with the logo; any other text is the screen's title.
+    /// nil shows the Uncrypt name with the logo; any other text is the screen's title.
     var title: String? = nil
     var strip: String? = nil
     var actions: [BarAction] = []
@@ -53,7 +53,7 @@ struct TopBar: View {
                     }
                     Group {
                         if let title { Text(title).foregroundColor(.white) }
-                        else { Text("UN").foregroundColor(.white) + Text("CONNECT").foregroundColor(.dtAccent) }
+                        else { Text("Un").foregroundColor(.white) + Text("crypt").foregroundColor(.dtAccent) }
                     }
                     .font(.system(size: 22, weight: .bold)).lineLimit(1).minimumScaleFactor(0.8)
                 }

@@ -86,7 +86,7 @@ enum AiSlashCommands {
         } catch { /* show what we have without it */ }
 
         var lines = [
-            "**UNCONNECT**",
+            "**Uncrypt**",
             "Version \(version) (build \(build))",
             "Developer: MRzefv",
             "",
@@ -95,7 +95,7 @@ enum AiSlashCommands {
         ]
         if let modelDeep { lines.append("Fix/deep model: \(modelDeep)") }
         if let serverOk { lines.append(serverOk ? "Server: reachable" : "Server: not responding right now") }
-        lines.append("Runs on UNCONNECT's own server; this app is the client for it.")
+        lines.append("Runs on Uncrypt's own server; this app is the client for it.")
         return lines.joined(separator: "\n")
     }
 }

@@ -200,7 +200,7 @@ final class BuildModel: ObservableObject {
         error = e.localizedDescription
         if let a = e as? ApiError, a.status == 409 { error = "A build is already running on your account." }
         // the server's own report for this build (steps, settings, trimmed trace), as a file to send
-        var text = "UNCONNECT build error\n\(Date())\nApp: \(error)\n"
+        var text = "Uncrypt build error\n\(Date())\nApp: \(error)\n"
         if !jobID.isEmpty, let d = try? await Api.shared.request("GET", "/api/build/\(jobID)/diag"), let s = String(data: d, encoding: .utf8) { text += "\n" + s }
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
