@@ -387,6 +387,18 @@ final class AiDecryptViewModel: ObservableObject {
         if let last = conversations.first { restore(last) }
         refreshVoice()
         Task { await AiKnowledge.refresh() }
+        resumeIfInterrupted()
+    }
+
+    /// If the app was backgrounded/killed mid-reply, the saved conversation ends on an unanswered user
+    /// message — `send()` always appends the user's message and persists it before the model runs, but the
+    /// reply itself is only persisted once the whole turn finishes. Pick it back up automatically instead of
+    /// leaving the chat looking like it swallowed the question.
+    private func resumeIfInterrupted() {
+        guard !isStreaming, let last = messages.last, last.role == .user else { return }
+        isStreaming = true
+        beginRun()
+        streamTask = Task { await self.runTurn() }
     }
 
     private func restore(_ c: SavedConversation) {
@@ -436,7 +448,7 @@ final class AiDecryptViewModel: ObservableObject {
 
     func open(_ id: UUID) {
         guard id != currentID, let c = conversations.first(where: { $0.id == id }) else { return }
-        cancel(); persist(); restore(c); refreshVoice()
+        cancel(); persist(); restore(c); refreshVoice(); resumeIfInterrupted()
     }
 
     var isCurrentPinned: Bool { conversations.first(where: { $0.id == currentID })?.pinned == true }
@@ -914,7 +926,10 @@ final class AiDecryptViewModel: ObservableObject {
     private func runTextTurn() async {
         var loops = 0
         var toneRetried = false
-        while loops < 4 {
+        // Staff/admin don't get boxed in by the tool-call round cap like everyone else — same bypass as the
+        // server's char limits (dt.me.staff mirrors the server's isAdmin || isStaff "elevated" check).
+        let maxLoops = AiDylibTool.available ? 50 : 4
+        while loops < maxLoops {
             loops += 1
             let assistantIndex = messages.count
             messages.append(AiChatMessage(role: .assistant, content: ""))
@@ -1043,9 +1058,23 @@ final class AiDecryptViewModel: ObservableObject {
                         messages.append(AiChatMessage(role: .tool, content: "Unknown tool \"\(call.name)\".", toolCallId: call.id, name: call.name))
                     }
                 }
-                // loop again so the model sees the tool results and can reply or call another tool
+                // loop again so the model sees the tool results and can reply or call another tool —
+                // unless this was the last round we're allowed: there's no follow-up call left to turn
+                // the tool results into an actual reply, so don't leave the "Running …" placeholder
+                // standing forever. Say so plainly right now instead.
+                if loops >= maxLoops {
+                    messages[assistantIndex].content =
+                        "That took more tool calls than I'm allowed in one turn, so I stopped partway through. " +
+                        "Send another message (even just \"continue\") and I'll pick up from what I already found."
+                    messages[assistantIndex].toolCalls = nil
+                }
             } catch {
                 errorText = error.localizedDescription
+                // Same deal on an error mid-loop: don't leave a frozen "Running …" bubble behind.
+                if assistantIndex < messages.count, messages[assistantIndex].content.hasPrefix("Running ") {
+                    messages[assistantIndex].content = "That step failed: \(error.localizedDescription)"
+                    messages[assistantIndex].toolCalls = nil
+                }
                 break
             }
         }
@@ -1255,6 +1284,7 @@ struct AiDecryptChatView: View {
     @StateObject private var viewModel = AiDecryptViewModel()
     @EnvironmentObject private var store: RepoStore
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @FocusState private var inputFocused: Bool
     @ObservedObject private var liveSync = LiveSync.shared
     @State private var showWebpageAlert = false
@@ -1314,6 +1344,10 @@ struct AiDecryptChatView: View {
         .onReceive(NotificationCenter.default.publisher(for: .liveAskAI)) { n in
             if let t = n.object as? String, !viewModel.isStreaming { viewModel.draft = t; viewModel.send() }
         }
+        // Flush whatever's already finished to disk the instant the app leaves the foreground — iOS can
+        // suspend or kill the process seconds later with zero further warning, and the only other persist()
+        // calls happen at the start/end of a turn, not while one is running.
+        .onChange(of: scenePhase) { phase in if phase != .active { viewModel.persist() } }
         .alert("Attach webpage", isPresented: $showWebpageAlert) {
             TextField("https://example.com", text: $webpageURL)
                 .textInputAutocapitalization(.never)
