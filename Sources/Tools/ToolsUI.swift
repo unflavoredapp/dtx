@@ -214,6 +214,6 @@ struct AutoRunToggle: View {
         }
         .confirmationDialog("Let \(tool.name) start by itself?", isPresented: $asking, titleVisibility: .visible) {
             Button("Allow it to start by itself") { ToolPrefs.giveAutoConsent(tool); isOn = true }
-        } message: { Text("It runs on the Decrypt.Team server each time you open an app, and counts against your tool limit. You can switch it off here at any time, or pause all auto-run in Settings > Plugins.") }
+        } message: { Text("It runs on the UNCONNECT server each time you open an app, and counts against your tool limit. You can switch it off here at any time, or pause all auto-run in Settings > Plugins.") }
     }
 }

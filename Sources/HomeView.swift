@@ -176,7 +176,7 @@ struct HomeView: View {
                 Image("Logo").resizable().frame(width: 52, height: 52).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 VStack(alignment: .leading, spacing: 3) {
                     Text("BUILT BY").font(.caption2.weight(.semibold)).tracking(2).foregroundStyle(.secondary)
-                    (Text("The ").foregroundColor(.white) + Text("Decrypt.team").foregroundColor(.dtAccent)).font(.subheadline.bold())
+                    (Text("The ").foregroundColor(.white) + Text("UNCONNECT").foregroundColor(.dtAccent)).font(.subheadline.bold())
                     Text("Special thanks to everyone who helps make this possible.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)

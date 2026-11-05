@@ -25,7 +25,7 @@ struct OnboardingView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Color.dtLine))
             VStack(spacing: 6) {
-                Text("Decrypt.Team").font(.title2.bold())
+                Text("UNCONNECT").font(.title2.bold())
                 Text("Ai-Decrypt is an AI chat built into the app — it finds and decrypts apps, inspects crashes, and writes dylibs with you. Staff get full access — sign in with Telegram, or look around as a guest.")
                     .font(.subheadline).multilineTextAlignment(.center).foregroundStyle(.secondary)
             }

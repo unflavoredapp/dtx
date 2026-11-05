@@ -14,7 +14,7 @@ enum ApiError: LocalizedError {
 
 private struct ErrBody: Decodable { var error: String? }
 
-/// Talks to the Decrypt.team server. The sign-in cookie lives in the shared cookie store, so a login done in the web sheet is used here too.
+/// Talks to the UNCONNECT server (still hosted at decrypt.team — only the in-app branding changed). The sign-in cookie lives in the shared cookie store, so a login done in the web sheet is used here too.
 final class Api {
     static let shared = Api()
 
@@ -164,7 +164,7 @@ final class Session: ObservableObject {
                     if p.status == "done" {
                         await self.refresh()
                         if self.allowed { self.justSignedIn = true }
-                        self.phase = self.allowed ? .idle : .denied("This account isn't on the Decrypt.Team staff list.")
+                        self.phase = self.allowed ? .idle : .denied("This account isn't on the UNCONNECT staff list.")
                         return
                     }
                     if p.status == "expired" { self.phase = .failed("The login link expired. Try again."); return }

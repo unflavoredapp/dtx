@@ -218,7 +218,7 @@ setInterval(() => {
   for (const [id, j] of jobs) if (j.ended && now - j.ended > JOB_TTL) { jobs.delete(id); if (pruneOut) { try { fs.rmSync(path.join(pruneOut, id), { recursive: true, force: true }); } catch {} } }
 }, 600000).unref();
 
-const ZIPPY = 'import sys,os,zipfile\nroot=sys.argv[1]\nz=zipfile.ZipFile(sys.stdout.buffer,"w",zipfile.ZIP_DEFLATED)\nfor d,_,fs in os.walk(root):\n  for f in sorted(fs):\n    p=os.path.join(d,f)\n    z.write(p,os.path.join(sys.argv[2],os.path.relpath(p,root)))\nz.comment=u"\\u1d0d\\u01a6\\u1d22\\u1d07\\ua730\\u039b | Decrypt.Team".encode("utf8")\nz.close()';
+const ZIPPY = 'import sys,os,zipfile\nroot=sys.argv[1]\nz=zipfile.ZipFile(sys.stdout.buffer,"w",zipfile.ZIP_DEFLATED)\nfor d,_,fs in os.walk(root):\n  for f in sorted(fs):\n    p=os.path.join(d,f)\n    z.write(p,os.path.join(sys.argv[2],os.path.relpath(p,root)))\nz.comment=u"\\u1d0d\\u01a6\\u1d22\\u1d07\\ua730\\u039b | UNCONNECT".encode("utf8")\nz.close()';
 // Summary of Report/verification.json (the correctness gate, verify.js) as shown next to each part: status + the first few findings.
 function gateOf(json) {
   try {
@@ -624,7 +624,7 @@ function mount(app, o) {
     audit(req, 'download', `${path.basename(part.name)}-recovered.zip`, `job ${req.params.id} project zip`);
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${path.basename(part.name).replace(/[^\w.\-]/g, '_')}-recovered.zip"`);
-    const t = spawn('python3', ['-c', ZIPPY, dir, path.basename(part.name).replace(/\.\w+$/, '').replace(/[^\w.\-]/g, '_') + '-decrypt.team']);
+    const t = spawn('python3', ['-c', ZIPPY, dir, path.basename(part.name).replace(/\.\w+$/, '').replace(/[^\w.\-]/g, '_') + '-unconnect']);
     t.stdout.pipe(res);
     t.on('error', () => res.end());
   });
