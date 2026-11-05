@@ -45,8 +45,8 @@ final class Api {
         try JSONDecoder().decode(T.self, from: try await request("GET", path, timeout: timeout))
     }
 
-    func post<T: Decodable>(_ path: String, json: Any? = nil) async throws -> T {
-        try JSONDecoder().decode(T.self, from: try await request("POST", path, json: json ?? [String: Any]()))
+    func post<T: Decodable>(_ path: String, json: Any? = nil, timeout: TimeInterval = 30) async throws -> T {
+        try JSONDecoder().decode(T.self, from: try await request("POST", path, json: json ?? [String: Any](), timeout: timeout))
     }
 }
 

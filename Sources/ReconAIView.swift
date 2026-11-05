@@ -94,7 +94,9 @@ extension ReconstructAPI {
         if let symbol { body["symbol"] = symbol }
         if let selection { body["selection"] = selection }
         if let selectionLine { body["selectionLine"] = selectionLine }
-        let started: AIStarted = try await Api.shared.post("\(base)/jobs/\(jobID)/ai/chat", json: body)
+        // Starting the job means the server reads the whole project and assembles the prompt before it can even
+        // queue the model call — for a large reconstructed dylib that alone can take well past the default 30s.
+        let started: AIStarted = try await Api.shared.post("\(base)/jobs/\(jobID)/ai/chat", json: body, timeout: 90)
         await MainActor.run { onStart(started) }
         var misses = 0
         while true {
