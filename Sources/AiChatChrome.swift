@@ -37,6 +37,7 @@ struct AiSidebar: View {
     @State private var searching = false
     @State private var showSettings = false
     @State private var showEdits = false
+    @State private var showTools = false
     @ObservedObject private var live = LiveSync.shared
     @State private var openScreen: LiveScreen?
     @FocusState private var searchFocused: Bool
@@ -80,6 +81,7 @@ struct AiSidebar: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
                     action("square.and.pencil", "New chat") { vm.newChat(); onClose() }
+                    action("wrench.and.screwdriver", "Tools") { onClose(); showTools = true }
                     action("paintpalette", "Colour wheel") { onColorWheel() }
                     action("face.smiling", "GIFs") { onGif() }
                     if vm.latestReconProject != nil { action("plus.forwardslash.minus", "Code edits") { showEdits = true } }
@@ -126,6 +128,7 @@ struct AiSidebar: View {
         .sheet(isPresented: $showEdits) {
             if let proj = vm.latestReconProject { AiEditHistorySheet(jobID: proj.jobID, name: proj.name) }
         }
+        .sheet(isPresented: $showTools) { ToolsHubView() }
         .fullScreenCover(isPresented: $showSettings) {
             AiSettingsView(vm: vm)
         }

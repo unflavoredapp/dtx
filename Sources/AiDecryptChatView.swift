@@ -801,6 +801,7 @@ final class AiDecryptViewModel: ObservableObject {
             style += "A reconstructed project (\(proj.name)) is open in this chat. When the person asks to add a feature, change, fix or rename something in its code, call edit_code with a full description. The app writes the change into the project files and shows the exact diff with a Revert button (if it needs approval it shows Apply and Reject instead, so only say it is written once the card says Applied). "
         }
         style += "The app updates itself from signed releases from the server (Live Update: live configuration, plugins, recipes, native builds). For questions about updates, versions or sync call live_update. "
+        style += "To inspect an app directly (what's in its Info.plist, its linked frameworks and dylibs, a published recipe) call run_tool with its id and the app's https IPA link; call list_tools first (dylib_only true when they're asking about dylibs/frameworks/branding/injection) if you don't already know the tool_id. "
         if AiLiveRelease.available {
             style += "When the person asks for a NEW TOOL that inspects an IPA (list frameworks, show permissions, read a plist key), call propose_recipe: it writes an on-device recipe; they test it on an IPA and tap Publish, so never say it is live. "
             style += "When the person asks you to change the app for everyone without a new build (accent colour, hide or reorder tools, a banner, flags) or to ADD OR CHANGE SCREENS (a new page in the sidebar, a quick-actions block on the empty new-chat screen, a settings or links page), call propose_live_release: it only DRAFTS a release; they review the exact diff and tap Publish, so never say it is published. "
@@ -934,7 +935,7 @@ final class AiDecryptViewModel: ObservableObject {
             let assistantIndex = messages.count
             messages.append(AiChatMessage(role: .assistant, content: ""))
             do {
-                var tools: [[String: Any]] = [AiImageGen.schema, AiRepoTools.searchAppsSchema, AiThemeTool.schema, AiColorIntent.schema, AiLiveTool.schema] + (AiPrefs.gifs ? [AiGifTool.schema] : [])
+                var tools: [[String: Any]] = [AiImageGen.schema, AiRepoTools.searchAppsSchema, AiThemeTool.schema, AiColorIntent.schema, AiLiveTool.schema, AiToolBridge.listToolsSchema, AiToolBridge.runToolSchema] + (AiPrefs.gifs ? [AiGifTool.schema] : [])
                 if AiLiveRelease.available { tools.append(AiLiveRelease.schema); tools.append(AiRecipeTool.schema) }
                 if AiDylibTool.available { tools.append(AiDylibTool.schema) }
                 tools.append(AiCrashTool.schema)
@@ -1050,6 +1051,14 @@ final class AiDecryptViewModel: ObservableObject {
                         }
                     } else if call.name == AiThemeTool.name {
                         let result = AiThemeTool.run(arguments: call.arguments)
+                        messages.append(AiChatMessage(role: .tool, content: result, toolCallId: call.id, name: call.name))
+                    } else if call.name == "list_tools" {
+                        let dylibOnly = AiToolBridge.listToolsDylibOnly(call.arguments)
+                        let result = await AiToolBridge.listTools(dylibOnly: dylibOnly)
+                        messages.append(AiChatMessage(role: .tool, content: result, toolCallId: call.id, name: call.name))
+                    } else if call.name == "run_tool" {
+                        let a = AiToolBridge.runToolArgs(call.arguments)
+                        let result = await AiToolBridge.runTool(toolID: a.toolID, ipaURL: a.ipaURL)
                         messages.append(AiChatMessage(role: .tool, content: result, toolCallId: call.id, name: call.name))
                     } else if let bin = binaryAttachment, let tool = AiToolBridge.tool(named: call.name) {
                         let resultText = await AiToolBridge.run(tool, fileURL: bin.fileURL)
@@ -1213,9 +1222,11 @@ final class AiDecryptViewModel: ObservableObject {
                     }
                     messages[index].content = "Extracting \(lib.name)…"
                     let bytes = try await zip.read(entry, limit: 200_000_000)
-                    let r = try await ReconstructAPI.reconstruct(name: lib.name, data: bytes) { [weak self] line in
+                    var r = try await ReconstructAPI.reconstruct(name: lib.name, data: bytes) { [weak self] line in
                         self?.messages[index].content = "\(lib.name): \(line)"
                     }
+                    r.appURL = ipaString
+                    r.appName = card.appName
                     results.append(r)
                 }
                 messages[index].content = "Reconstructed \(results.filter { $0.downloadPath != nil }.count) of \(selected.count) from \(card.appName):"
@@ -1287,6 +1298,9 @@ struct AiDecryptChatView: View {
     @FocusState private var inputFocused: Bool
     @ObservedObject private var liveSync = LiveSync.shared
     @State private var showWebpageAlert = false
+    @State private var dylibToolsURL = ""
+    @State private var dylibToolsName = ""
+    @State private var showDylibTools = false
     @State private var webpageURL = ""
     @State private var photoItem: PhotosPickerItem?
     @State private var showPhotoPicker = false
@@ -1351,6 +1365,7 @@ struct AiDecryptChatView: View {
         } message: {
             Text("Its text content will be added as context for your next message.")
         }
+        .sheet(isPresented: $showDylibTools) { DylibToolsView(url: dylibToolsURL, dylibName: dylibToolsName) }
     }
 
     /// session total, plus the tokens of the reply that is still being written
@@ -1532,6 +1547,10 @@ struct AiDecryptChatView: View {
                 }
             }, onEdit: { result in
                 ReconEditorPresenter.present(jobID: result.jobID, dylibName: result.dylibName)
+            }, onTools: { result in
+                dylibToolsURL = result.appURL ?? ""
+                dylibToolsName = result.dylibName
+                showDylibTools = true
             })
         }
     }

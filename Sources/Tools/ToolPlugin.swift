@@ -39,6 +39,13 @@ struct Tool: Identifiable {
     let run: (ToolContext) async throws -> [PluginSection]
 }
 
+/// Whether a tool (bundled, recipe, or server) is aimed at dylibs/frameworks/the binary itself, going only by
+/// its id/name/summary — there's no separate tagging system, so this is a plain keyword match.
+func isDylibTool(_ t: Tool) -> Bool {
+    let s = (t.id + " " + t.name + " " + t.summary).lowercased()
+    return s.contains("dylib") || s.contains("binary") || s.contains("librar") || s.contains("framework")
+}
+
 enum ToolRegistry {
     /// The tools that ship inside the app.
     static let bundled: [Tool] = [

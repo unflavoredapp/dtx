@@ -123,6 +123,7 @@ struct AiReconResultsCard: View {
     let results: [ReconResult]
     let onDownload: (ReconResult) -> Void
     let onEdit: (ReconResult) -> Void
+    let onTools: (ReconResult) -> Void
 
     @State private var downloading: String?
 
@@ -140,6 +141,11 @@ struct AiReconResultsCard: View {
                     if !r.jobID.isEmpty {
                         Button { onEdit(r) } label: {
                             Image(systemName: "pencil.and.outline").foregroundStyle(Color.dtAccent)
+                        }.buttonStyle(.plain)
+                    }
+                    if r.appURL != nil {
+                        Button { onTools(r) } label: {
+                            Image(systemName: "wrench.and.screwdriver").foregroundStyle(Color.dtAccent)
                         }.buttonStyle(.plain)
                     }
                     if r.downloadPath != nil {

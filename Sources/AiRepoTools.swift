@@ -97,6 +97,8 @@ struct ReconResult: Equatable {
     let summary: String
     let downloadPath: String?   // GET this (staff-gated) to get the recovered project zip
     var jobID: String = ""      // the decomp job, for browsing/editing/rebuilding its source
+    var appURL: String? = nil   // the IPA this dylib was pulled from, so dylib-aimed tools can run against it
+    var appName: String? = nil
 }
 
 /// Drives the site's own Ghidra/lifter reconstruction engine, already mounted at /api/staff/decomp (staff-gated;
