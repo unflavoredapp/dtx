@@ -65,7 +65,7 @@ final class RepoStore: ObservableObject {
                     let m = RepoMeta(icon: Self.https(file.iconURL),
                                      news: file.news.map { NewsItem(title: $0.title, caption: $0.caption ?? "", image: Self.https($0.imageURL), url: Self.https($0.url)) },
                                      featured: file.featured)
-                    return (r, n, file.apps.map { Self.entry($0, repo: r, repoName: n) }, m)
+                    return (r, n, Self.bundled(file.apps.map { Self.entry($0, repo: r, repoName: n) }), m)
                 }
             }
             for await (r, n, list, m) in group {
@@ -127,6 +127,32 @@ final class RepoStore: ObservableObject {
                         subtitle: a.subtitle ?? "", category: (a.category ?? "").trimmingCharacters(in: .whitespaces),
                         shots: a.shots.compactMap { Self.https($0) },
                         key: (a.name + "\n" + a.bundleIdentifier + "\n" + (a.developerName ?? "")).lowercased())
+    }
+
+    /// One entry per bundle ID: the same app listed several times (once per version, say) becomes a single app with all its versions.
+    nonisolated static func bundled(_ list: [AppEntry]) -> [AppEntry] {
+        var order: [String] = []
+        var groups: [String: [AppEntry]] = [:]
+        for a in list {
+            if groups[a.bid] == nil { order.append(a.bid) }
+            groups[a.bid, default: []].append(a)
+        }
+        return order.compactMap { bid -> AppEntry? in
+            guard let g = groups[bid], let first = g.first else { return nil }
+            if g.count == 1 && Set(first.versions.map { $0.version }).count == first.versions.count { return first }
+            var seen = Set<String>()
+            var vs: [AppVersion] = []
+            for v in g.flatMap({ $0.versions }) where seen.insert(v.version).inserted { vs.append(v) }
+            vs.sort { compareVersions($0.version, $1.version) > 0 }
+            // describe the app by its newest listing
+            let lead = g.first { $0.current?.version == vs.first?.version } ?? first
+            return AppEntry(name: lead.name, bid: bid, developer: lead.developer.isEmpty ? first.developer : lead.developer,
+                            icon: lead.icon ?? g.compactMap { $0.icon }.first, versions: vs, repoName: first.repoName, repoURL: first.repoURL,
+                            subtitle: lead.subtitle.isEmpty ? (g.first { !$0.subtitle.isEmpty }?.subtitle ?? "") : lead.subtitle,
+                            category: lead.category.isEmpty ? (g.first { !$0.category.isEmpty }?.category ?? "") : lead.category,
+                            shots: lead.shots.isEmpty ? (g.first { !$0.shots.isEmpty }?.shots ?? []) : lead.shots,
+                            key: lead.key)
+        }
     }
 
     nonisolated static func https(_ s: String?) -> URL? {
