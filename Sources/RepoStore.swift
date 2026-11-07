@@ -26,6 +26,9 @@ final class RepoStore: ObservableObject {
     @Published var showTools = false
     @Published var showAiDecrypt = false
     /// Bumped by the top buttons on list screens so the chat can open its sidebar / start a new chat when they close.
+    /// The full-screen page currently open from the menu (nil = chat). Lives here so it survives theme refreshes.
+    @Published var screen: AppScreen?
+    @Published var hostDrawerTick = 0
     @Published var sidebarTick = 0
     @Published var newChatTick = 0
 
@@ -130,4 +133,11 @@ final class RepoStore: ObservableObject {
         guard let s, let u = URL(string: s), u.scheme == "https" else { return nil }
         return u
     }
+}
+
+
+/// Every page the menu can open, shown full screen.
+enum AppScreen: String, Identifiable {
+    case browse, library, signed, signer, decrypt, certificate, batch, theme, install, tools, settings
+    var id: String { rawValue }
 }

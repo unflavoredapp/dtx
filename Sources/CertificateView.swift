@@ -42,12 +42,7 @@ struct CertificateView: View {
                 ToolbarItem(placement: .topBarLeading) { Button("Close") { dismiss() } }
                 ToolbarItem(placement: .topBarTrailing) { Button { importing = true } label: { Image(systemName: "plus") } }
             }
-            .fileImporter(isPresented: $importing, allowedContentTypes: [.data, .zip], allowsMultipleSelection: true) { result in
-                switch result {
-                case .success(let urls): read(urls)
-                case .failure(let e): message = e.localizedDescription
-                }
-            }
+            .filePicker(isPresented: $importing, types: [.data, .zip], multiple: true) { urls in read(urls) }
             .alert("Certificate password", isPresented: $askPassword) {
                 SecureField("Password", text: $password)
                 Button("Import") { finishImport(password: password) }

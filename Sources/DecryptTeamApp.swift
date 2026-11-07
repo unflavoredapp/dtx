@@ -31,6 +31,7 @@ struct RootView: View {
     @EnvironmentObject var session: Session
     @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var live = LiveSync.shared
+    @StateObject private var chatVM = AiDecryptViewModel()
 
     var body: some View {
         Group {
@@ -59,11 +60,15 @@ struct RootView: View {
     }
 
     private var chatHome: some View {
-        AiDecryptChatView(embedded: true)
+        AiDecryptChatView(embedded: true, viewModel: chatVM)
             .environmentObject(store)
             .environmentObject(session)
-            .sheet(isPresented: $store.showQuickBuild) { QuickBuildView() }
-            .sheet(isPresented: $store.showTools) { ToolsHubView() }
+            // Menu pages are full screen and hosted here, outside the chat's theme-refresh id, so they never dismiss themselves.
+            .fullScreenCover(isPresented: Binding(get: { store.screen != nil }, set: { if !$0 { store.screen = nil } })) {
+                ScreenHost(vm: chatVM).environmentObject(store).environmentObject(session)
+            }
+            .onChange(of: store.showQuickBuild) { on in if on { store.showQuickBuild = false; store.screen = .decrypt } }
+            .onChange(of: store.showTools) { on in if on { store.showTools = false; store.screen = .tools } }
             .sheet(item: $store.pickedApp) { app in
                 NavigationStack {
                     AppDetailView(app: app)

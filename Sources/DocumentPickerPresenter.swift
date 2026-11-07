@@ -22,16 +22,16 @@ enum DocumentPickerPresenter {
     /// The delegate must outlive the picker's presentation; SwiftUI won't hold it, so we do.
     private static var retained: Delegate?
 
-    static func pickFiles(types: [UTType] = [.data], allowsMultiple: Bool = true, completion: @escaping ([URL]) -> Void) {
-        present(types: types, allowsMultiple: allowsMultiple, completion: completion)
+    static func pickFiles(types: [UTType] = [.data], allowsMultiple: Bool = true, asCopy: Bool = true, completion: @escaping ([URL]) -> Void) {
+        present(types: types, allowsMultiple: allowsMultiple, asCopy: asCopy, completion: completion)
     }
 
     static func pickAudio(completion: @escaping (URL?) -> Void) {
-        present(types: [.audio], allowsMultiple: false) { completion($0.first) }
+        present(types: [.audio], allowsMultiple: false, asCopy: true) { completion($0.first) }
     }
 
-    private static func present(types: [UTType], allowsMultiple: Bool, completion: @escaping ([URL]) -> Void) {
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
+    private static func present(types: [UTType], allowsMultiple: Bool, asCopy: Bool, completion: @escaping ([URL]) -> Void) {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: asCopy)
         picker.allowsMultipleSelection = allowsMultiple
         let delegate = Delegate(onPick: completion)
         picker.delegate = delegate
@@ -60,5 +60,23 @@ enum SharePresenter {
         vc.popoverPresentationController?.sourceView = top.view
         vc.popoverPresentationController?.sourceRect = CGRect(x: top.view.bounds.midX, y: top.view.bounds.midY, width: 0, height: 0)
         top.present(vc, animated: true)
+    }
+}
+
+import SwiftUI
+
+extension View {
+    /// Drop-in replacement for `.fileImporter` that uses the UIKit picker (works inside full-screen covers and sheets).
+    func filePicker(isPresented: Binding<Bool>, types: [UTType] = [.data], multiple: Bool = false, asCopy: Bool = true,
+                    onPick: @escaping ([URL]) -> Void) -> some View {
+        onChange(of: isPresented.wrappedValue) { on in
+            guard on else { return }
+            isPresented.wrappedValue = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                DocumentPickerPresenter.pickFiles(types: types, allowsMultiple: multiple, asCopy: asCopy) { urls in
+                    if !urls.isEmpty { onPick(urls) }
+                }
+            }
+        }
     }
 }

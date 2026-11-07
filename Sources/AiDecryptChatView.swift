@@ -1291,7 +1291,7 @@ final class AiDecryptViewModel: ObservableObject {
 struct AiDecryptChatView: View {
     /// true when the chat IS the home screen (no sheet to close); false when opened as a sheet
     var embedded = false
-    @StateObject private var viewModel = AiDecryptViewModel()
+    @ObservedObject var viewModel: AiDecryptViewModel
     @EnvironmentObject private var store: RepoStore
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
@@ -1877,5 +1877,5 @@ private struct AiCodeBlockView: View {
 }
 
 #Preview {
-    AiDecryptChatView().environmentObject(RepoStore())
+    AiDecryptChatView(viewModel: AiDecryptViewModel()).environmentObject(RepoStore())
 }

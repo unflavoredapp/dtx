@@ -115,12 +115,8 @@ struct BatchView: View {
                         .disabled(running || picked.isEmpty || dylibs.active.isEmpty)
                 }
             }
-            .fileImporter(isPresented: $importing, allowedContentTypes: [.data], allowsMultipleSelection: true) { result in
-                importDylibs(result)
-            }
-            .fileImporter(isPresented: $importingIPA, allowedContentTypes: [.data], allowsMultipleSelection: true) { result in
-                importIPAs(result)
-            }
+            .filePicker(isPresented: $importing, multiple: true) { urls in importDylibs(.success(urls)) }
+            .filePicker(isPresented: $importingIPA, multiple: true) { urls in importIPAs(.success(urls)) }
             .sheet(isPresented: $showRepoPicker) {
                 BatchRepoPicker { apps in apps.forEach { addRepoApp($0) } }.environmentObject(store)
             }

@@ -72,9 +72,8 @@ struct SignerView: View {
             .navigationTitle("Signer")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Close") { dismiss() } } }
-            .fileImporter(isPresented: $importing, allowedContentTypes: [.data], allowsMultipleSelection: false) { result in
-                if case .success(let urls) = result, let url = urls.first { Task { await signFile(url) } }
-                else if case .failure(let e) = result { error = e.localizedDescription }
+            .filePicker(isPresented: $importing) { urls in
+                if let url = urls.first { Task { await signFile(url) } }
             }
             .sheet(isPresented: $showCertificate) { CertificateView() }
         }

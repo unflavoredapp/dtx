@@ -279,8 +279,7 @@ struct BuildScreen: View {
         .navigationTitle("Decrypt & Inject").navigationBarTitleDisplayMode(.inline)
         .onAppear { useStore = newer || repoURL == nil }
         .onChange(of: storeInfo?.ver) { _ in if model.stage == .idle { useStore = newer || repoURL == nil } }
-        .fileImporter(isPresented: $importing, allowedContentTypes: importFramework ? [.folder] : [.data], allowsMultipleSelection: !importFramework) { result in
-            guard case .success(let urls) = result else { return }
+        .filePicker(isPresented: $importing, types: importFramework ? [.folder] : [.data], multiple: !importFramework, asCopy: !importFramework) { urls in
             for u in urls { if importFramework { addFramework(u) } else { addDylib(u) } }
         }
         .task(id: repoURL?.absoluteString ?? "") { await loadCommands() }

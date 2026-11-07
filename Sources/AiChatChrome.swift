@@ -35,18 +35,7 @@ struct AiSidebar: View {
     @EnvironmentObject private var store: RepoStore
     @State private var query = ""
     @State private var searching = false
-    @State private var showSettings = false
     @State private var showEdits = false
-    @State private var showTools = false
-    @State private var showCertificate = false
-    @State private var showDeviceSetup = false
-    @State private var showTheme = false
-    @State private var showBatch = false
-    @State private var showBrowse = false
-    @State private var showLibrary = false
-    @State private var showSigned = false
-    @State private var showSigner = false
-    @State private var showDecrypt = false
     @ObservedObject private var activity = ActivityStore.shared
     @ObservedObject private var live = LiveSync.shared
     @State private var openScreen: LiveScreen?
@@ -84,16 +73,16 @@ struct AiSidebar: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
                     profileHeader
-                    action("circle.grid.3x3.fill", "Browse", detail: "Opened your sources · \(store.repos.count) repo\(store.repos.count == 1 ? "" : "s")") { onClose(); showBrowse = true }
-                    action("square.grid.2x2.fill", "Library", detail: "Opened the app library · \(store.apps.count) app\(store.apps.count == 1 ? "" : "s") indexed") { onClose(); showLibrary = true }
-                    action(UIImage(systemName: "signature") != nil ? "signature" : "pencil.and.scribble", "Signed", detail: "Opened signed builds · \(SignedStore.shared.items.count) build\(SignedStore.shared.items.count == 1 ? "" : "s")") { onClose(); showSigned = true }
-                    action("pencil.tip.crop.circle", "Signer", detail: "Checked signing readiness") { onClose(); showSigner = true }
-                    action("lock.open", "Decrypt", detail: "Opened Decrypt & Inject") { onClose(); showDecrypt = true }
-                    action("checkmark.seal", "Certificate", detail: "Opened certificates") { onClose(); showCertificate = true }
-                    action("square.stack.3d.up", "Batch", detail: "Opened batch inject") { onClose(); showBatch = true }
-                    action("paintpalette", "Theme", detail: "Opened theme") { onClose(); showTheme = true }
-                    action("iphone.and.arrow.forward", "Install", detail: "Opened native install setup") { onClose(); showDeviceSetup = true }
-                    action("wrench.and.screwdriver", "Tools", detail: "Opened the tools hub") { onClose(); showTools = true }
+                    action("circle.grid.3x3.fill", "Browse", detail: "Opened your sources · \(store.repos.count) repo\(store.repos.count == 1 ? "" : "s")") { open(.browse) }
+                    action("square.grid.2x2.fill", "Library", detail: "Opened the app library · \(store.apps.count) app\(store.apps.count == 1 ? "" : "s") indexed") { open(.library) }
+                    action(UIImage(systemName: "signature") != nil ? "signature" : "pencil.and.scribble", "Signed", detail: "Opened signed builds · \(SignedStore.shared.items.count) build\(SignedStore.shared.items.count == 1 ? "" : "s")") { open(.signed) }
+                    action("pencil.tip.crop.circle", "Signer", detail: "Checked signing readiness") { open(.signer) }
+                    action("lock.open", "Decrypt", detail: "Opened Decrypt & Inject") { open(.decrypt) }
+                    action("checkmark.seal", "Certificate", detail: "Opened certificates") { open(.certificate) }
+                    action("square.stack.3d.up", "Batch", detail: "Opened batch inject") { open(.batch) }
+                    action("paintpalette", "Theme", detail: "Opened theme") { open(.theme) }
+                    action("iphone.and.arrow.forward", "Install", detail: "Opened native install setup") { open(.install) }
+                    action("wrench.and.screwdriver", "Tools", detail: "Opened the tools hub") { open(.tools) }
                     if vm.latestReconProject != nil { action("plus.forwardslash.minus", "Code edits") { showEdits = true } }
                     ForEach((live.config.screens ?? []).filter { ($0.show ?? ["sidebar"]).contains("sidebar") }) { s in
                         action(s.icon ?? "square.grid.2x2", s.title) { openScreen = s }
@@ -120,7 +109,7 @@ struct AiSidebar: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .overlay(alignment: .bottom) {
             HStack {
-                Button { vm.newChat(); onClose() } label: {
+                Button { vm.newChat(); store.screen = nil; onClose() } label: {
                     Label("Chat", systemImage: "square.and.pencil")
                         .font(.system(size: 18, weight: .semibold)).foregroundStyle(Color.dtOnAccent)
                         .padding(.horizontal, 26).padding(.vertical, 14)
@@ -128,7 +117,7 @@ struct AiSidebar: View {
                         .shadow(color: Color.dtAccent.opacity(0.35), radius: 12, y: 4)
                 }
                 Spacer()
-                Button { showSettings = true } label: {
+                Button { open(.settings) } label: {
                     Image(systemName: "gearshape").font(.system(size: 20, weight: .medium)).foregroundStyle(.white)
                         .aiGlassCircle(52)
                 }
@@ -138,19 +127,6 @@ struct AiSidebar: View {
         }
         .sheet(isPresented: $showEdits) {
             if let proj = vm.latestReconProject { AiEditHistorySheet(jobID: proj.jobID, name: proj.name) }
-        }
-        .sheet(isPresented: $showTools) { ToolsHubView() }
-        .sheet(isPresented: $showCertificate) { CertificateView() }
-        .sheet(isPresented: $showDeviceSetup) { DeviceSetupView() }
-        .sheet(isPresented: $showTheme) { ThemeScreen() }
-        .sheet(isPresented: $showBatch) { BatchView() }
-        .sheet(isPresented: $showBrowse) { ReposView() }
-        .sheet(isPresented: $showLibrary) { SearchView() }
-        .sheet(isPresented: $showSigned) { SignedView() }
-        .sheet(isPresented: $showSigner) { SignerView() }
-        .sheet(isPresented: $showDecrypt) { QuickBuildView() }
-        .fullScreenCover(isPresented: $showSettings) {
-            AiSettingsView(vm: vm)
         }
     }
 
@@ -196,6 +172,12 @@ struct AiSidebar: View {
             .padding(.horizontal, 12).padding(.top, 22).padding(.bottom, 6)
     }
 
+    /// Opens a page full screen; inside the host this just swaps the page and keeps it on top.
+    private func open(_ s: AppScreen) {
+        store.screen = s
+        onClose()
+    }
+
     private func action(_ icon: String, _ title: String, detail: String? = nil, _ run: @escaping () -> Void) -> some View {
         Button { ActivityStore.shared.log(title, detail); run() } label: {
             HStack(spacing: 16) {
@@ -208,5 +190,78 @@ struct AiSidebar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+
+// MARK: - Full-screen page host
+
+/// Shows the chosen menu page full screen with the same sidebar underneath: tap the menu button and the
+/// drawer slides over the page you are on, and picking another item swaps pages without going back to chat.
+struct ScreenHost: View {
+    @ObservedObject var vm: AiDecryptViewModel
+    @EnvironmentObject private var store: RepoStore
+    @EnvironmentObject private var session: Session
+    @State private var drawer = false
+
+    var body: some View {
+        GeometryReader { geo in
+            let sw = geo.size.width * 0.82
+            ZStack(alignment: .leading) {
+                AppBackground().ignoresSafeArea()
+                AiSidebar(vm: vm, onClose: { set(false) }).frame(width: sw)
+                page
+                    .background(AppBackground())
+                    .clipShape(RoundedRectangle(cornerRadius: drawer ? 32 : 0, style: .continuous))
+                    .overlay {
+                        if drawer {
+                            Color.black.opacity(0.4)
+                                .clipShape(RoundedRectangle(cornerRadius: 32, style: .continuous))
+                                .contentShape(Rectangle())
+                                .onTapGesture { set(false) }
+                        }
+                    }
+                    .overlay(alignment: .bottomLeading) {
+                        if !drawer && showsFloatingMenu {
+                            Button { set(true) } label: {
+                                Image(systemName: "line.3.horizontal").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
+                                    .aiGlassCircle(38)
+                            }
+                            .padding(.leading, 16).padding(.bottom, 18)
+                        }
+                    }
+                    .shadow(color: .black.opacity(drawer ? 0.5 : 0), radius: 18)
+                    .offset(x: drawer ? sw : 0)
+            }
+        }
+        .preferredColorScheme(.dark)
+        .tint(.dtAccent)
+        .onChange(of: store.hostDrawerTick) { _ in set(true) }
+    }
+
+    /// Browse, Library and Signed already carry the chat-style menu button in their own top bar.
+    private var showsFloatingMenu: Bool {
+        guard let s = store.screen else { return true }
+        return !(s == .browse || s == .library || s == .signed)
+    }
+
+    private func set(_ open: Bool) {
+        withAnimation(.spring(response: 0.36, dampingFraction: 0.88)) { drawer = open }
+    }
+
+    @ViewBuilder private var page: some View {
+        switch store.screen ?? .tools {
+        case .browse: ReposView()
+        case .library: SearchView()
+        case .signed: SignedView()
+        case .signer: SignerView()
+        case .decrypt: QuickBuildView()
+        case .certificate: CertificateView()
+        case .batch: BatchView()
+        case .theme: ThemeScreen()
+        case .install: DeviceSetupView()
+        case .tools: ToolsHubView()
+        case .settings: AiSettingsView(vm: vm)
+        }
     }
 }

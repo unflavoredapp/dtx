@@ -235,7 +235,9 @@ struct TopBarHost: ViewModifier {
         ZStack {
             HStack(alignment: .top) {
                 Button {
-                    store.closeSearch(); dismiss()
+                    store.closeSearch()
+                    if back == nil, store.screen != nil { store.hostDrawerTick += 1; return }   // stay on this page, slide the menu over it
+                    dismiss()
                     if back == nil { store.sidebarTick += 1 }
                 } label: {
                     Image(systemName: back == nil ? "line.3.horizontal" : "chevron.left")
@@ -245,7 +247,7 @@ struct TopBarHost: ViewModifier {
                 .accessibilityLabel(back == nil ? "Menu" : "Back")
                 Spacer()
                 HStack(spacing: 0) {
-                    Button { store.closeSearch(); dismiss(); store.newChatTick += 1 } label: {
+                    Button { store.closeSearch(); store.screen = nil; dismiss(); store.newChatTick += 1 } label: {
                         Image(systemName: "square.and.pencil").font(.system(size: 19, weight: .medium)).foregroundStyle(.white)
                             .frame(width: 50, height: 46)
                     }

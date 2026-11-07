@@ -56,11 +56,8 @@ struct DeviceSetupView: View {
             .navigationTitle("Native install")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Close") { dismiss() } } }
-            .fileImporter(isPresented: $importing, allowedContentTypes: [.data, .propertyList], allowsMultipleSelection: false) { result in
-                switch result {
-                case .success(let urls): if let u = urls.first { importPairing(u) }
-                case .failure(let e): message = e.localizedDescription
-                }
+            .filePicker(isPresented: $importing, types: [.data, .propertyList]) { urls in
+                if let u = urls.first { importPairing(u) }
             }
             .confirmationDialog("Forget the built-in pairing?", isPresented: $confirmReset, titleVisibility: .visible) {
                 Button("Forget", role: .destructive) { Task { await manager.resetPairing() } }
