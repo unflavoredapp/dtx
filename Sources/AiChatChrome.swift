@@ -41,6 +41,7 @@ struct AiSidebar: View {
     @State private var showCertificate = false
     @State private var showDeviceSetup = false
     @State private var showTheme = false
+    @State private var showBatch = false
     @State private var showBrowse = false
     @State private var showLibrary = false
     @State private var showSigned = false
@@ -89,6 +90,7 @@ struct AiSidebar: View {
                     action("pencil.tip.crop.circle", "Signer", detail: "Checked signing readiness") { onClose(); showSigner = true }
                     action("lock.open", "Decrypt", detail: "Opened Decrypt & Inject") { onClose(); showDecrypt = true }
                     action("checkmark.seal", "Certificate", detail: "Opened certificates") { onClose(); showCertificate = true }
+                    action("square.stack.3d.up", "Batch", detail: "Opened batch inject") { onClose(); showBatch = true }
                     action("paintpalette", "Theme", detail: "Opened theme") { onClose(); showTheme = true }
                     action("iphone.and.arrow.forward", "Install", detail: "Opened native install setup") { onClose(); showDeviceSetup = true }
                     action("wrench.and.screwdriver", "Tools", detail: "Opened the tools hub") { onClose(); showTools = true }
@@ -141,6 +143,7 @@ struct AiSidebar: View {
         .sheet(isPresented: $showCertificate) { CertificateView() }
         .sheet(isPresented: $showDeviceSetup) { DeviceSetupView() }
         .sheet(isPresented: $showTheme) { ThemeScreen() }
+        .sheet(isPresented: $showBatch) { BatchView() }
         .sheet(isPresented: $showBrowse) { ReposView() }
         .sheet(isPresented: $showLibrary) { SearchView() }
         .sheet(isPresented: $showSigned) { SignedView() }
