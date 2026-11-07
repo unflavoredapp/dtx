@@ -184,13 +184,18 @@ struct BarHeightKey: PreferenceKey {
 
 struct TopBarHost: ViewModifier {
     @EnvironmentObject var store: RepoStore
+    @EnvironmentObject var session: Session
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var searchFocused: Bool
     let tab: AppTab
     let title: String?
     let strip: String?
     let actions: [BarAction]
     let back: String?
     let titleIcon: URL?
-    @State private var barHeight: CGFloat = 140
+    @State private var barHeight: CGFloat = 64
+
+    private var searchOpen: Bool { store.searchOpen && store.tab == tab }
 
     func body(content: Content) -> some View {
         content
@@ -198,15 +203,91 @@ struct TopBarHost: ViewModifier {
             .safeAreaInset(edge: .top, spacing: 0) { Color.clear.frame(height: barHeight) }
             .overlay(alignment: .top) {
                 VStack(spacing: 8) {
-                    TopBar(tab: tab, title: title, strip: strip, actions: actions, back: back, titleIcon: titleIcon)
-                        .background(GeometryReader { g in Color.clear.preference(key: BarHeightKey.self, value: g.size.height + 10) })
-                    if store.searchOpen && store.tab == tab { SearchDropdown(searcher: store.searcher) }
+                    chatBar
+                        .background(GeometryReader { g in Color.clear.preference(key: BarHeightKey.self, value: g.size.height + 8) })
+                    if searchOpen {
+                        HStack(spacing: 10) {
+                            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                            TextField("Search apps in your repos…", text: $store.searchText)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled().submitLabel(.search).focused($searchFocused)
+                            if !store.searchText.isEmpty {
+                                Button { store.searchText = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                            }
+                        }
+                        .padding(.horizontal, 16).padding(.vertical, 12)
+                        .aiGlass(Capsule())
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                        SearchDropdown(searcher: store.searcher)
+                    }
                     Spacer(minLength: 0)
                 }
-                .padding(.horizontal, 14).padding(.top, 4)
+                .padding(.horizontal, 14).padding(.top, 6)
                 .animation(.easeInOut(duration: 0.2), value: store.searchOpen)
             }
             .onPreferenceChange(BarHeightKey.self) { barHeight = $0 }
+            .onChange(of: store.searchOpen) { isOpen in
+                if isOpen && store.tab == tab { DispatchQueue.main.async { searchFocused = true } } else { searchFocused = false }
+            }
+    }
+
+    /// The same buttons as the chat screen: a round menu button on the left, compose + more in a pill on the right.
+    private var chatBar: some View {
+        ZStack {
+            HStack(alignment: .top) {
+                Button {
+                    store.closeSearch(); dismiss()
+                    if back == nil { store.sidebarTick += 1 }
+                } label: {
+                    Image(systemName: back == nil ? "line.3.horizontal" : "chevron.left")
+                        .font(.system(size: 18, weight: .medium)).foregroundStyle(.white)
+                        .aiGlassCircle(46)
+                }
+                .accessibilityLabel(back == nil ? "Menu" : "Back")
+                Spacer()
+                HStack(spacing: 0) {
+                    Button { store.closeSearch(); dismiss(); store.newChatTick += 1 } label: {
+                        Image(systemName: "square.and.pencil").font(.system(size: 19, weight: .medium)).foregroundStyle(.white)
+                            .frame(width: 50, height: 46)
+                    }
+                    .accessibilityLabel("New chat")
+                    Menu {
+                        ForEach(Array(actions.enumerated()), id: \.offset) { item in menuItems(item.element) }
+                        Divider()
+                        Text("Signed in as " + (session.username ?? "guest"))
+                        if session.signedIn { Button("Sign out", role: .destructive) { Task { await session.signOut() } } }
+                    } label: {
+                        Image(systemName: "ellipsis").font(.system(size: 19, weight: .bold)).foregroundStyle(.white)
+                            .frame(width: 50, height: 46)
+                    }
+                    .accessibilityLabel("More")
+                }
+                .aiGlass(Capsule())
+            }
+            if let title {
+                Text(title).font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+                    .lineLimit(1).minimumScaleFactor(0.7).frame(maxWidth: 150)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    @ViewBuilder private func menuItems(_ a: BarAction) -> some View {
+        switch a {
+        case .search:
+            Button { store.tab = tab; store.searchOpen.toggle() } label: { Label("Search", systemImage: "magnifyingglass") }
+        case .lock:
+            Button { store.showQuickBuild = true } label: { Label("Decrypt & Inject", systemImage: "lock.open") }
+        case .icon(let name, let run):
+            Button(action: run) { Label(name == "plus" ? "Add" : "Action", systemImage: name) }
+        case .text(let t, let run):
+            Button(t, action: run)
+        case .label(let t):
+            Text(t)
+        case .menu(let name, let items):
+            ForEach(Array(items.enumerated()), id: \.offset) { item in
+                Button { item.element.1() } label: { Label(item.element.0, systemImage: name) }
+            }
+        }
     }
 }
 

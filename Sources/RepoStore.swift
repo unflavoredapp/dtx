@@ -23,6 +23,9 @@ final class RepoStore: ObservableObject {
     func closeSearch() { searchOpen = false; searchText = "" }
     @Published var showTools = false
     @Published var showAiDecrypt = false
+    /// Bumped by the top buttons on list screens so the chat can open its sidebar / start a new chat when they close.
+    @Published var sidebarTick = 0
+    @Published var newChatTick = 0
 
     @AppStorage("dt.server") var server: String = "https://decrypt.team"
 

@@ -1327,6 +1327,8 @@ struct AiDecryptChatView: View {
                 .frame(width: sw)
 
                 chatLayer
+                    // opaque backing so the sidebar never shows through the strip under the composer
+                    .background(Color.black.ignoresSafeArea())
                     .clipShape(RoundedRectangle(cornerRadius: sidebarOpen ? 32 : 0, style: .continuous))
                     .overlay {
                         if sidebarOpen {
@@ -1347,6 +1349,8 @@ struct AiDecryptChatView: View {
         .preferredColorScheme(.dark)
         .tint(.dtAccent)
         .onAppear { viewModel.store = store }
+        .onChange(of: store.sidebarTick) { _ in setSidebar(true) }
+        .onChange(of: store.newChatTick) { _ in viewModel.newChat() }
         .onReceive(NotificationCenter.default.publisher(for: .liveAskAI)) { n in
             if let t = n.object as? String, !viewModel.isStreaming { viewModel.draft = t; viewModel.send() }
         }

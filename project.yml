@@ -4,9 +4,16 @@ options:
   deploymentTarget:
     iOS: "16.0"
   createIntermediateGroups: true
+packages:
+  ZIPFoundation:
+    url: https://github.com/weichsel/ZIPFoundation
+    from: 0.9.20
+  OpenSSL:
+    url: https://github.com/HAHALOSAH/OpenSSL-Swift-Package
+    branch: main
 settings:
   base:
-    SWIFT_VERSION: "5.0"
+    SWIFT_VERSION: "5.10"
     MARKETING_VERSION: "1.0.0"
     CURRENT_PROJECT_VERSION: "1"
     CODE_SIGNING_ALLOWED: "NO"
@@ -24,6 +31,14 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: team.decrypt.0xDEC7977EA1
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/Engine-Bridging-Header.h
+        CLANG_CXX_LANGUAGE_STANDARD: gnu++20
+        CLANG_CXX_LIBRARY: libc++
+        CLANG_ENABLE_MODULES: YES
+        HEADER_SEARCH_PATHS: "$(inherited) $(SRCROOT)/Sources $(SRCROOT)/Sources/zsign $(SRCROOT)/Sources/zsign/common"
+    dependencies:
+      - package: ZIPFoundation
+      - package: OpenSSL
     info:
       path: Sources/Info.plist
       properties:

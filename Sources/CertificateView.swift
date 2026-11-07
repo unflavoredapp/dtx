@@ -1,52 +1,38 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Certificate: keep your signing files (.p12 certificate and .mobileprovision profile) on this device so they're
-/// one tap away. Files are copied into the app's own storage; swipe a row to remove it.
+/// Certificate: import a .p12 + .mobileprovision (loose files, or one .zip with an optional password .txt),
+/// see who they belong to and when they expire, and pick the one Signer uses.
 struct CertificateView: View {
     @Environment(\.dismiss) private var dismiss
-    @State private var files: [URL] = []
+    @ObservedObject private var store = CertificateStore.shared
     @State private var importing = false
-    @State private var error: String?
-
-    static var folder: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return base.appendingPathComponent("Certificates", isDirectory: true)
-    }
-
-    private static var allowedTypes: [UTType] {
-        ["p12", "mobileprovision"].compactMap { UTType(filenameExtension: $0) } + [.data]
-    }
+    @State private var pending: CertImportBundle?
+    @State private var askPassword = false
+    @State private var password = ""
+    @State private var message: String?
 
     var body: some View {
         NavigationStack {
             List {
-                if files.isEmpty {
+                if store.certificates.isEmpty {
                     VStack(spacing: 10) {
                         Image(systemName: "checkmark.seal").font(.system(size: 40)).foregroundStyle(Color.dtAccent)
                         Text("No certificate yet").font(.title3.weight(.semibold))
-                        Text("Import your .p12 certificate and .mobileprovision profile.")
+                        Text("Import a .p12 and its .mobileprovision, or one .zip that holds both.")
                             .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity).padding(.vertical, 40)
                     .listRowBackground(Color.clear)
                 }
-                ForEach(files, id: \.self) { url in
-                    HStack(spacing: 14) {
-                        Image(systemName: url.pathExtension.lowercased() == "p12" ? "key.fill" : "doc.badge.gearshape.fill")
-                            .foregroundStyle(Color.dtAccent).frame(width: 28)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(url.lastPathComponent).lineLimit(1).truncationMode(.middle)
-                            Text(url.pathExtension.lowercased() == "p12" ? "Certificate" : "Provisioning profile")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
+                ForEach(store.certificates) { cert in
+                    row(cert)
                 }
                 .onDelete { idx in
-                    for i in idx { try? FileManager.default.removeItem(at: files[i]) }
-                    reload()
+                    let list = store.certificates
+                    for i in idx { store.delete(list[i]); ActivityStore.shared.log("Certificate", "removed `" + list[i].name + "`") }
                 }
-                if let error { Text(error).font(.footnote).foregroundStyle(.red) }
+                if let message { Text(message).font(.footnote).foregroundStyle(.orange) }
             }
             .scrollContentBackground(.hidden)
             .background(AppBackground())
@@ -56,41 +42,70 @@ struct CertificateView: View {
                 ToolbarItem(placement: .topBarLeading) { Button("Close") { dismiss() } }
                 ToolbarItem(placement: .topBarTrailing) { Button { importing = true } label: { Image(systemName: "plus") } }
             }
-            .fileImporter(isPresented: $importing, allowedContentTypes: Self.allowedTypes, allowsMultipleSelection: true) { result in
+            .fileImporter(isPresented: $importing, allowedContentTypes: [.data, .zip], allowsMultipleSelection: true) { result in
                 switch result {
-                case .success(let urls): add(urls)
-                case .failure(let e): error = e.localizedDescription
+                case .success(let urls): read(urls)
+                case .failure(let e): message = e.localizedDescription
                 }
             }
-            .onAppear(perform: reload)
+            .alert("Certificate password", isPresented: $askPassword) {
+                SecureField("Password", text: $password)
+                Button("Import") { finishImport(password: password) }
+                Button("Cancel", role: .cancel) { pending = nil }
+            } message: { Text("The password of the .p12 file. Leave it empty if it has none.") }
         }
         .preferredColorScheme(.dark)
     }
 
-    private func reload() {
-        let list = (try? FileManager.default.contentsOfDirectory(at: Self.folder, includingPropertiesForKeys: nil)) ?? []
-        files = list.filter { ["p12", "mobileprovision"].contains($0.pathExtension.lowercased()) }
-            .sorted { $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending }
+    private func row(_ cert: Certificate) -> some View {
+        let info = store.cachedProfileInfo(for: cert)
+        let active = store.activeID == cert.id
+        return Button { store.activeID = cert.id } label: {
+            HStack(spacing: 14) {
+                Image(systemName: active ? "checkmark.seal.fill" : "seal")
+                    .font(.system(size: 24)).foregroundStyle(active ? Color.dtAccent : Color.secondary).frame(width: 30)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(cert.name).font(.headline).foregroundStyle(.white).lineLimit(1)
+                    if let team = info.team { Text(team).font(.subheadline).foregroundStyle(.secondary).lineLimit(1) }
+                    Text(expiryText(info)).font(.caption).foregroundStyle(info.isExpired ? Color.red : (info.isExpiringSoon ? Color.orange : Color.secondary))
+                }
+                Spacer()
+                if active { Text("Active").font(.caption.weight(.bold)).foregroundStyle(Color.dtAccent) }
+            }
+        }
+        .buttonStyle(.plain)
     }
 
-    private func add(_ urls: [URL]) {
-        error = nil
-        let fm = FileManager.default
-        try? fm.createDirectory(at: Self.folder, withIntermediateDirectories: true)
-        for src in urls {
-            guard ["p12", "mobileprovision"].contains(src.pathExtension.lowercased()) else {
-                error = "Only .p12 and .mobileprovision files can be added."
-                continue
-            }
-            let scoped = src.startAccessingSecurityScopedResource()
-            defer { if scoped { src.stopAccessingSecurityScopedResource() } }
-            let dst = Self.folder.appendingPathComponent(src.lastPathComponent)
-            try? fm.removeItem(at: dst)
-            do {
-                try fm.copyItem(at: src, to: dst)
-                ActivityStore.shared.log("Certificate", "imported `" + src.lastPathComponent + "`")
-            } catch { self.error = error.localizedDescription }
+    private func expiryText(_ info: ProfileInfo) -> String {
+        guard let days = info.daysUntilExpiry else { return "Expiry unknown" }
+        if info.isExpired { return "Expired" }
+        return days == 0 ? "Expires today" : "Expires in \(days) day\(days == 1 ? "" : "s")"
+    }
+
+    // MARK: importing
+
+    private func read(_ urls: [URL]) {
+        message = nil
+        let scoped = urls.filter { $0.startAccessingSecurityScopedResource() }
+        defer { scoped.forEach { $0.stopAccessingSecurityScopedResource() } }
+        let bundle = CertImportBundle.read(urls)
+        if !bundle.problems.isEmpty { message = bundle.problems.joined(separator: " "); return }
+        guard bundle.p12 != nil else { message = "Add the .p12 certificate too."; return }
+        guard bundle.profile != nil else { message = "Add the .mobileprovision profile too."; return }
+        pending = bundle
+        if let pw = bundle.password { finishImport(password: pw) } else { password = ""; askPassword = true }
+    }
+
+    private func finishImport(password: String) {
+        guard let b = pending, let p12 = b.p12, let profile = b.profile else { return }
+        pending = nil
+        let name = (p12.name as NSString).deletingPathExtension
+        do {
+            let cert = try store.importPair(name: name, p12: p12.data, password: password, provision: profile.data)
+            ActivityStore.shared.log("Certificate", "imported `" + cert.name + "`")
+            message = nil
+        } catch {
+            message = error.localizedDescription
         }
-        reload()
     }
 }
