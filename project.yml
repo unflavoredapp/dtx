@@ -11,6 +11,8 @@ packages:
   OpenSSL:
     url: https://github.com/HAHALOSAH/OpenSSL-Swift-Package
     branch: main
+  IDeviceKit:
+    path: IDeviceKit
 settings:
   base:
     SWIFT_VERSION: "5.10"
@@ -36,9 +38,16 @@ targets:
         CLANG_CXX_LIBRARY: libc++
         CLANG_ENABLE_MODULES: YES
         HEADER_SEARCH_PATHS: "$(inherited) $(SRCROOT)/Sources $(SRCROOT)/Sources/zsign $(SRCROOT)/Sources/zsign/common"
+        CODE_SIGN_ENTITLEMENTS: Uncrypt.entitlements
     dependencies:
       - package: ZIPFoundation
       - package: OpenSSL
+      - package: IDeviceKit
+        product: IDeviceSwift
+      - package: IDeviceKit
+        product: IDevice
+      - target: DeviceTunnel
+        embed: true
     info:
       path: Sources/Info.plist
       properties:
@@ -62,3 +71,26 @@ targets:
             CFBundleURLSchemes:
               - decryptteam
         ITSAppUsesNonExemptEncryption: false
+        UIBackgroundModes:
+          - audio
+        BGTaskSchedulerPermittedIdentifiers:
+          - "$(PRODUCT_BUNDLE_IDENTIFIER).userTask.*"
+        NSLocalNetworkUsageDescription: Uncrypt uses the local network to pair with this device for native app installation.
+        NSBonjourServices:
+          - _remotepairing-pairable-host._tcp
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+  DeviceTunnel:
+    type: app-extension
+    platform: iOS
+    sources:
+      - DeviceTunnel/PacketTunnelProvider.swift
+      - DeviceTunnel/LocalPacketReflection.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: team.decrypt.0xDEC7977EA1.DeviceTunnel
+        CODE_SIGN_ENTITLEMENTS: DeviceTunnel/DeviceTunnel.entitlements
+        INFOPLIST_FILE: DeviceTunnel/Info.plist
+        SKIP_INSTALL: "YES"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: "NO"

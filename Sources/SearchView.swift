@@ -26,10 +26,19 @@ struct AppIconView: View {
 struct SearchView: View {
     @EnvironmentObject var store: RepoStore
     @StateObject private var searcher = AppSearcher()
+    @ObservedObject private var device = DeviceLibrary.shared
+    @State private var mode: LibraryMode = .library
 
     var body: some View {
         NavigationStack {
             ScrollView {
+                Picker("", selection: $mode) {
+                    ForEach(LibraryMode.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented).padding(.top, 6)
+                if mode == .device {
+                    DeviceTabView().padding(.bottom, 24)
+                } else {
                 LazyVStack(spacing: 0) {
                     if store.onlyDefault {
                         HStack {
@@ -52,12 +61,16 @@ struct SearchView: View {
                     if store.loading && store.apps.isEmpty { ProgressView().padding(.top, 40) }
                     else if !store.loading && !searcher.searching && searcher.shown.isEmpty { Text("No apps yet.").foregroundStyle(.secondary).padding(.top, 40) }
                 }
-                .padding(.horizontal, 14).padding(.bottom, 24)
+                .padding(.bottom, 24)
+                }
             }
+            .padding(.horizontal, 14)
             .background(AppBackground())
             .navigationDestination(for: AppEntry.self) { AppDetailView(app: $0) }
-            .withTopBar(.search, title: "Library", strip: searcher.total > 0 ? "\(formatCount(Int64(searcher.total))) Apps" : nil)
-            .refreshable { await store.refresh() }
+            .withTopBar(.search, title: "Library", strip: mode == .device
+                        ? DeviceTabView.strip(device.apps.count)
+                        : (searcher.total > 0 ? "\(formatCount(Int64(searcher.total))) Apps" : nil))
+            .refreshable { if mode == .device { if NativeInstaller.isSelected { device.refresh() } } else { await store.refresh() } }
             .task(id: store.apps.count) { searcher.update(query: "", apps: store.apps) }
         }
     }

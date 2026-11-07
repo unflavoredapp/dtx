@@ -102,35 +102,74 @@ struct SignerView: View {
 
     @ViewBuilder private var sourceSection: some View {
         switch source {
-        case .decrypted:
-            Section("Builds from Decrypt") {
-                if builds.items.isEmpty {
-                    Text("Nothing decrypted yet. Use Decrypt first.").foregroundStyle(.secondary)
-                }
-                ForEach(builds.items.prefix(30)) { e in
-                    Button { Task { await signRemote(e.link, name: e.name) } } label: {
-                        pickRow(e.name, e.version + " • " + e.bid)
-                    }.disabled(busy || URL(string: e.link) == nil)
-                }
+        case .decrypted: decryptedSection
+        case .repos: reposSection
+        case .files: filesSection
+        }
+    }
+
+    private var decryptedSection: some View {
+        Section("Builds from Decrypt") {
+            if builds.items.isEmpty {
+                Text("Nothing decrypted yet. Use Decrypt first.").foregroundStyle(.secondary)
             }
-        case .repos:
-            Section("Apps from your repos") {
-                TextField("Search apps", text: $query).textInputAutocapitalization(.never).autocorrectionDisabled()
-                let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-                let list = q.count < 2 ? [] : Array(store.apps.filter { $0.key.contains(q) }.prefix(25))
-                if q.count < 2 { Text("Type at least 2 letters.").foregroundStyle(.secondary).font(.footnote) }
-                ForEach(list) { app in
-                    Button { Task { await signRemote(app.current?.downloadURL, name: app.name) } } label: {
-                        pickRow(app.name, (app.current.map { "v" + $0.version } ?? "") + " • " + app.repoName)
-                    }.disabled(busy || app.current?.downloadURL == nil)
-                }
+            ForEach(Array(builds.items.prefix(30))) { (e: SignedEntry) in
+                decryptedRow(e)
             }
-        case .files:
-            Section("A file on this phone") {
-                Button { importing = true } label: {
-                    Label("Choose an .ipa", systemImage: "doc.badge.plus").foregroundStyle(Color.dtAccent)
-                }.disabled(busy)
+        }
+    }
+
+    private func decryptedRow(_ e: SignedEntry) -> some View {
+        let sub: String = e.version + " • " + e.bid
+        let valid: Bool = URL(string: e.link) != nil
+        return Button {
+            Task { await signRemote(e.link, name: e.name) }
+        } label: {
+            pickRow(e.name, sub)
+        }
+        .disabled(busy || !valid)
+    }
+
+    private var repoResults: [AppEntry] {
+        let q: String = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard q.count >= 2 else { return [] }
+        var out: [AppEntry] = []
+        for app in store.apps where app.key.contains(q) {
+            out.append(app)
+            if out.count >= 25 { break }
+        }
+        return out
+    }
+
+    private var reposSection: some View {
+        Section("Apps from your repos") {
+            TextField("Search apps", text: $query).textInputAutocapitalization(.never).autocorrectionDisabled()
+            if query.trimmingCharacters(in: .whitespaces).count < 2 {
+                Text("Type at least 2 letters.").foregroundStyle(.secondary).font(.footnote)
             }
+            ForEach(repoResults) { (app: AppEntry) in
+                repoRow(app)
+            }
+        }
+    }
+
+    private func repoRow(_ app: AppEntry) -> some View {
+        let version: String = app.current.map { "v" + $0.version } ?? ""
+        let sub: String = version + " • " + app.repoName
+        let link: String? = app.current?.downloadURL
+        return Button {
+            Task { await signRemote(link, name: app.name) }
+        } label: {
+            pickRow(app.name, sub)
+        }
+        .disabled(busy || link == nil)
+    }
+
+    private var filesSection: some View {
+        Section("A file on this phone") {
+            Button { importing = true } label: {
+                Label("Choose an .ipa", systemImage: "doc.badge.plus").foregroundStyle(Color.dtAccent)
+            }.disabled(busy)
         }
     }
 
@@ -152,6 +191,7 @@ struct SignerView: View {
                 Text(r.version + " • " + r.sizeString).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
+            InstallSignedButton(build: r)
             ShareLink(item: r.ipaURL) { Image(systemName: "square.and.arrow.up").foregroundStyle(Color.dtAccent) }
         }
     }

@@ -39,6 +39,8 @@ struct AiSidebar: View {
     @State private var showEdits = false
     @State private var showTools = false
     @State private var showCertificate = false
+    @State private var showDeviceSetup = false
+    @State private var showTheme = false
     @State private var showBrowse = false
     @State private var showLibrary = false
     @State private var showSigned = false
@@ -87,6 +89,8 @@ struct AiSidebar: View {
                     action("pencil.tip.crop.circle", "Signer", detail: "Checked signing readiness") { onClose(); showSigner = true }
                     action("lock.open", "Decrypt", detail: "Opened Decrypt & Inject") { onClose(); showDecrypt = true }
                     action("checkmark.seal", "Certificate", detail: "Opened certificates") { onClose(); showCertificate = true }
+                    action("paintpalette", "Theme", detail: "Opened theme") { onClose(); showTheme = true }
+                    action("iphone.and.arrow.forward", "Install", detail: "Opened native install setup") { onClose(); showDeviceSetup = true }
                     action("wrench.and.screwdriver", "Tools", detail: "Opened the tools hub") { onClose(); showTools = true }
                     if vm.latestReconProject != nil { action("plus.forwardslash.minus", "Code edits") { showEdits = true } }
                     ForEach((live.config.screens ?? []).filter { ($0.show ?? ["sidebar"]).contains("sidebar") }) { s in
@@ -135,6 +139,8 @@ struct AiSidebar: View {
         }
         .sheet(isPresented: $showTools) { ToolsHubView() }
         .sheet(isPresented: $showCertificate) { CertificateView() }
+        .sheet(isPresented: $showDeviceSetup) { DeviceSetupView() }
+        .sheet(isPresented: $showTheme) { ThemeScreen() }
         .sheet(isPresented: $showBrowse) { ReposView() }
         .sheet(isPresented: $showLibrary) { SearchView() }
         .sheet(isPresented: $showSigned) { SignedView() }

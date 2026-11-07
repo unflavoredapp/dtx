@@ -13,6 +13,8 @@ final class RepoStore: ObservableObject {
     @Published var message: String?
     @Published var tab: AppTab = .home
     @Published var showQuickBuild = false
+    /// Name handed to Decrypt from the Device tab ("DRM · Locked" apps).
+    @Published var pendingDecryptQuery: String?
     // the search that drops down from the top bar
     let searcher = AppSearcher()
     @Published var searchOpen = false

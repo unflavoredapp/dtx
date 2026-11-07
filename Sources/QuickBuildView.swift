@@ -47,7 +47,10 @@ struct QuickBuildView: View {
             .navigationTitle("Start a build").navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: AppEntry.self) { AppDetailView(app: $0) }
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Close") { dismiss() } } }
-            .task { searcher.minChars = 2 }
+            .task {
+                searcher.minChars = 2
+                if let pending = store.pendingDecryptQuery { query = pending; store.pendingDecryptQuery = nil }
+            }
             .onChange(of: query) { _ in searcher.update(query: query, apps: store.apps) }
         }
         .preferredColorScheme(.dark)

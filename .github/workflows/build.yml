@@ -19,6 +19,29 @@ jobs:
       - name: Prepare the log folder
         run: mkdir -p logs
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Native build cache (idevice Rust library)
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build/device-native
+            IDeviceKit/.build/IDevice.xcframework
+          key: idevice-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Native/Device/source.json', 'Native/Device/uncrypt_pairing.rs', '.github/scripts/build_device_native.py') }}
+
+      - name: Build the native device library (idevice)
+        run: |
+          set -o pipefail
+          {
+            TOOLCHAIN="$(python3 -c 'import json;print(json.load(open("Native/Device/source.json"))["rust_toolchain"])')"
+            rustup toolchain install "$TOOLCHAIN" --profile minimal
+            python3 .github/scripts/fetch_devicekit.py
+            python3 .github/scripts/integrate_devicekit.py
+            python3 .github/scripts/build_device_native.py
+          } 2>&1 | tee logs/01a-native-device.log
+
       - name: Install XcodeGen
         run: set -o pipefail; brew install xcodegen 2>&1 | tee logs/01-xcodegen-install.log
 
@@ -42,6 +65,13 @@ jobs:
         run: |
           APP=$(find build/Build/Products -maxdepth 2 -name "DecryptTeam.app" | head -n 1)
           test -d "$APP"
+          # Native install needs packet-tunnel-provider on the app AND the tunnel extension. An unsigned binary
+          # carries no entitlements, so ad-hoc sign with them; your signer keeps the request.
+          APPEX="$APP/PlugIns/DeviceTunnel.appex"
+          test -d "$APPEX" || { echo "DeviceTunnel.appex is missing from the app"; exit 1; }
+          for b in "$APP"/Frameworks/*; do [ -e "$b" ] && codesign --force --sign - --timestamp=none "$b" || true; done
+          codesign --force --sign - --timestamp=none --entitlements DeviceTunnel/DeviceTunnel.entitlements "$APPEX"
+          codesign --force --sign - --timestamp=none --entitlements Uncrypt.entitlements "$APP"
           rm -rf Payload DecryptTeam.ipa
           mkdir Payload
           cp -R "$APP" Payload/

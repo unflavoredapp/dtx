@@ -4,12 +4,29 @@ import SwiftUI
 struct SignedView: View {
     @EnvironmentObject var store: RepoStore
     @ObservedObject private var signed = SignedStore.shared
+    @ObservedObject private var phoneBuilds = SignedBuildStore.shared   // IPAs signed on this phone
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    if signed.items.isEmpty {
+                    ForEach(phoneBuilds.entries) { b in
+                        HStack(spacing: 14) {
+                            AppIconView(url: b.iconURL, name: b.name, size: 64)
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(b.name).font(.system(size: 20, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
+                                Text([b.version.isEmpty ? nil : b.version, b.bundleID].compactMap { $0 }.joined(separator: " • "))
+                                    .font(.system(size: 15)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                                RowPill(text: "Signed on phone" + (b.sizeString.isEmpty ? "" : " · " + b.sizeString))
+                            }
+                            Spacer(minLength: 0)
+                            InstallSignedButton(build: b)
+                            ShareLink(item: b.ipaURL) { Image(systemName: "square.and.arrow.up").foregroundStyle(Color.dtAccent) }
+                        }
+                        .padding(.vertical, 12)
+                        Divider().overlay(Color.dtLine)
+                    }
+                    if signed.items.isEmpty && phoneBuilds.entries.isEmpty {
                         VStack(spacing: 12) {
                             Image(systemName: UIImage(systemName: "signature") != nil ? "signature" : "pencil.and.scribble").font(.system(size: 44)).foregroundStyle(Color.dtAccent)
                             Text("Nothing signed yet").font(.title3.weight(.semibold))
@@ -26,7 +43,7 @@ struct SignedView: View {
                 .padding(.horizontal, 14).padding(.bottom, 24)
             }
             .background(AppBackground())
-            .withTopBar(.signed, title: "Signed", strip: "\(signed.items.count) App\(signed.items.count == 1 ? "" : "s")", actions: [.lock])
+            .withTopBar(.signed, title: "Signed", strip: "\(signed.items.count + phoneBuilds.entries.count) App\(signed.items.count + phoneBuilds.entries.count == 1 ? "" : "s")", actions: [.lock])
         }
     }
 

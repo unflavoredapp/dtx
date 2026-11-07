@@ -1328,7 +1328,7 @@ struct AiDecryptChatView: View {
 
                 chatLayer
                     // opaque backing so the sidebar never shows through the strip under the composer
-                    .background(Color.black.ignoresSafeArea())
+                    .background(AppBackground())
                     .clipShape(RoundedRectangle(cornerRadius: sidebarOpen ? 32 : 0, style: .continuous))
                     .overlay {
                         if sidebarOpen {
