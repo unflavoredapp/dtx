@@ -86,8 +86,8 @@ struct SourceBrowseView: View {
 
     private func header(_ t: String, icon: String? = nil) -> some View {
         HStack(spacing: 10) {
-            if let icon { Image(systemName: icon).font(.system(size: 24)).foregroundStyle(Color.dtAccent) }
-            Text(t).font(.system(size: 24, weight: .heavy)).tracking(4).foregroundStyle(.secondary)
+            if let icon { Image(systemName: icon).font(.system(size: 19)).foregroundStyle(Color.dtAccent) }
+            Text(t).font(.system(size: 19, weight: .heavy)).tracking(4).foregroundStyle(.secondary)
         }
         .padding(.top, 20).padding(.bottom, 10).padding(.leading, 4)
     }
@@ -96,24 +96,24 @@ struct SourceBrowseView: View {
         VStack(alignment: .leading, spacing: 0) {
             header("NEWS")
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 12) {
+                HStack(spacing: 8) {
                     ForEach(news) { n in
                         Button { if let u = n.url { UIApplication.shared.open(u) } } label: {
                             ZStack(alignment: .bottomLeading) {
                                 AsyncImage(url: n.image) { p in
                                     if let img = p.image { img.resizable().scaledToFill() } else { Color.white.opacity(0.05) }
                                 }
-                                .frame(width: 300, height: 240).clipped()
+                                .frame(width: 230, height: 120).clipped()
                                 LinearGradient(colors: [.clear, .black.opacity(0.88)], startPoint: .center, endPoint: .bottom)
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(n.title).font(.system(size: 22, weight: .bold)).foregroundStyle(.white).lineLimit(2)
-                                    if !n.caption.isEmpty { Text(n.caption).font(.system(size: 16)).foregroundStyle(.white.opacity(0.85)).lineLimit(2) }
+                                    Text(n.title).font(.system(size: 11, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
+                                    if !n.caption.isEmpty { Text(n.caption).font(.system(size: 11)).foregroundStyle(.white.opacity(0.75)).lineLimit(2) }
                                 }
-                                .padding(14)
+                                .padding(10)
                             }
-                            .frame(width: 300, height: 240).multilineTextAlignment(.leading)
-                            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                            .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(Color.dtAccent.opacity(0.6), lineWidth: 1.5))
+                            .frame(width: 230, height: 120).multilineTextAlignment(.leading)
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Color.white.opacity(0.12), lineWidth: 1))
                         }
                         .buttonStyle(.plain)
                     }
@@ -124,7 +124,7 @@ struct SourceBrowseView: View {
 
     private var chipsSection: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            LazyHGrid(rows: [GridItem(.fixed(50), spacing: 10), GridItem(.fixed(50), spacing: 10)], spacing: 10) {
+            LazyHGrid(rows: [GridItem(.fixed(40), spacing: 8), GridItem(.fixed(40), spacing: 8)], spacing: 8) {
                 chip("ALL", apps.count, "square.grid.2x2.fill", on: category == nil) { category = nil }
                 ForEach(chips) { c in
                     chip(c.name, c.count, Self.icon(c.name), on: category?.uppercased() == c.name) { category = (category?.uppercased() == c.name) ? nil : c.name }
@@ -137,13 +137,13 @@ struct SourceBrowseView: View {
     private func chip(_ name: String, _ count: Int, _ icon: String, on: Bool, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                Image(systemName: icon).font(.system(size: 17, weight: .bold))
-                Text(name).font(.system(size: 18, weight: .heavy))
+                Image(systemName: icon).font(.system(size: 14, weight: .bold))
+                Text(name).font(.system(size: 14, weight: .heavy))
                 Text("·").foregroundStyle(.secondary)
-                Text(formatCount(Int64(count))).font(.system(size: 17, design: .monospaced)).foregroundStyle(.secondary)
+                Text(formatCount(Int64(count))).font(.system(size: 14, design: .monospaced)).foregroundStyle(.secondary)
             }
             .foregroundStyle(on ? Color.dtAccent : .white)
-            .padding(.horizontal, 14).frame(height: 50)
+            .padding(.horizontal, 11).frame(height: 40)
             .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(on ? Color.dtAccent.opacity(0.14) : Color.white.opacity(0.06)))
             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(on ? Color.dtAccent : Color.white.opacity(0.1), lineWidth: on ? 1.5 : 1))
         }
@@ -170,14 +170,14 @@ struct SourceBrowseView: View {
                     ForEach(featured) { app in
                         NavigationLink(value: app) {
                             HStack(alignment: .top, spacing: 14) {
-                                AppIconView(url: app.icon, name: app.name, size: 80)
+                                AppIconView(url: app.icon, name: app.name, size: 64)
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(app.name).font(.system(size: 24, weight: .bold)).foregroundStyle(Color.dtAccent).lineLimit(1)
-                                    if !app.subtitle.isEmpty { Text(app.subtitle).font(.system(size: 17)).foregroundStyle(.secondary).lineLimit(3).multilineTextAlignment(.leading) }
+                                    Text(app.name).font(.system(size: 19, weight: .bold)).foregroundStyle(Color.dtAccent).lineLimit(1)
+                                    if !app.subtitle.isEmpty { Text(app.subtitle).font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(3).multilineTextAlignment(.leading) }
                                 }
                                 Spacer(minLength: 0)
                             }
-                            .padding(16).frame(width: 340, height: 130, alignment: .topLeading)
+                            .padding(12).frame(width: 270, height: 100, alignment: .topLeading)
                             .background(RoundedRectangle(cornerRadius: 24, style: .continuous).fill(Color.dtAccent.opacity(0.10)))
                             .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(Color.dtAccent.opacity(0.55), lineWidth: 1.5))
                             .overlay(alignment: .topTrailing) { Image(systemName: "star.fill").foregroundStyle(Color.dtAccent).padding(14) }
@@ -208,14 +208,14 @@ struct BrowseAppRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 14) {
-                AppIconView(url: app.icon, name: app.name, size: 66)
+                AppIconView(url: app.icon, name: app.name, size: 53)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(app.name).font(.system(size: 22, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
-                    if !line.isEmpty { Text(line).font(.system(size: 16)).foregroundStyle(.secondary).lineLimit(1) }
-                    if !app.subtitle.isEmpty { Text(app.subtitle).font(.system(size: 16)).foregroundStyle(.secondary).lineLimit(1) }
+                    Text(app.name).font(.system(size: 18, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
+                    if !line.isEmpty { Text(line).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1) }
+                    if !app.subtitle.isEmpty { Text(app.subtitle).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1) }
                 }
                 Spacer(minLength: 0)
-                Image(systemName: "arrow.up.right").font(.system(size: 17, weight: .bold)).foregroundStyle(.black)
+                Image(systemName: "arrow.up.right").font(.system(size: 14, weight: .bold)).foregroundStyle(.black)
                     .frame(width: 40, height: 40).background(Circle().fill(Color.dtAccent))
             }
             if !app.shots.isEmpty {
@@ -225,7 +225,7 @@ struct BrowseAppRow: View {
                             AsyncImage(url: u) { p in
                                 if let img = p.image { img.resizable().scaledToFill() } else { Color.white.opacity(0.06) }
                             }
-                            .frame(width: 150, height: 300).clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            .frame(width: 110, height: 220).clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                             .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Color.white.opacity(0.1)))
                         }
                     }
@@ -245,22 +245,22 @@ struct BrowseAppCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top) {
-                AppIconView(url: app.icon, name: app.name, size: 46)
+                AppIconView(url: app.icon, name: app.name, size: 37)
                 Spacer()
-                Text("i").font(.system(size: 16, weight: .heavy, design: .serif)).foregroundStyle(Color.dtOnAccent)
-                    .frame(width: 30, height: 30).background(Circle().fill(Color.dtAccent))
+                Text("i").font(.system(size: 13, weight: .heavy, design: .serif)).foregroundStyle(Color.dtOnAccent)
+                    .frame(width: 24, height: 24).background(Circle().fill(Color.dtAccent))
             }
-            Text(app.name).font(.system(size: 15, weight: .bold)).foregroundStyle(Color.dtAccent).lineLimit(2).multilineTextAlignment(.leading)
+            Text(app.name).font(.system(size: 12, weight: .bold)).foregroundStyle(Color.dtAccent).lineLimit(2).multilineTextAlignment(.leading)
             Text(app.bid).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
             HStack(spacing: 6) {
                 Circle().stroke(Color.dtAccent, lineWidth: 2).frame(width: 9, height: 9)
                 Text(app.subtitle.isEmpty ? app.developer : app.subtitle).font(.system(size: 12)).foregroundStyle(.white).lineLimit(1)
                 Spacer(minLength: 0)
-                if let v = app.current?.version { Text(v).font(.system(size: 13, weight: .bold, design: .monospaced)).foregroundStyle(Color.dtAccent).lineLimit(1) }
+                if let v = app.current?.version { Text(v).font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundStyle(Color.dtAccent).lineLimit(1) }
             }
         }
         .padding(12)
-        .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
         .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color.black.opacity(0.4)))
         .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(Color.dtAccent.opacity(0.35), lineWidth: 1))
         .contentShape(Rectangle())

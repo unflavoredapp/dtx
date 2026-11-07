@@ -145,13 +145,13 @@ struct AppPageView: View {
                 HStack(spacing: 8) {
                     RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.dtAccent).frame(width: 22, height: 26)
                         .overlay(Image(systemName: "lock.fill").font(.system(size: 11, weight: .bold)).foregroundStyle(Color.dtOnAccent))
-                    Text(app.repoName.uppercased()).font(.system(size: 20, weight: .heavy)).tracking(3).lineLimit(1)
+                    Text(app.repoName.uppercased()).font(.system(size: 16, weight: .heavy)).tracking(3).lineLimit(1)
                 }
             } else {
                 HStack(spacing: 10) {
-                    AppIconView(url: app.icon, name: app.name, size: 38)
+                    AppIconView(url: app.icon, name: app.name, size: 30)
                     VStack(alignment: .leading, spacing: 0) {
-                        Text(app.name).font(.system(size: 17, weight: .bold)).lineLimit(1)
+                        Text(app.name).font(.system(size: 14, weight: .bold)).lineLimit(1)
                         Text(app.bid).font(.system(size: 12, design: .monospaced)).foregroundStyle(Color.dtAccent).lineLimit(1)
                     }
                 }
@@ -167,7 +167,7 @@ struct AppPageView: View {
 
     private func roundButton(_ icon: String, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: icon).font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
+            Image(systemName: icon).font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
                 .frame(width: 42, height: 42).background(Circle().fill(Color.white.opacity(0.1)))
         }
         .buttonStyle(.plain)
@@ -180,14 +180,14 @@ struct AppPageView: View {
             Button { startDownload() } label: { downloadLabel }.buttonStyle(.plain)
             Spacer()
             VStack(spacing: 2) {
-                Text("UNCRYPT").font(.system(size: 14, weight: .heavy)).tracking(1.5).foregroundStyle(Color.dtAccent)
+                Text("UNCRYPT").font(.system(size: 11, weight: .heavy)).tracking(1.5).foregroundStyle(Color.dtAccent)
                 Text("Powered by DECRYPT.TEAM").font(.system(size: 11)).foregroundStyle(.secondary)
             }
             Spacer()
             Button { goSign() } label: {
                 VStack(spacing: 4) {
-                    Image(systemName: "signature").font(.system(size: 26, weight: .medium))
-                    Text("Sign IPA").font(.system(size: 16, weight: .bold))
+                    Image(systemName: "signature").font(.system(size: 21, weight: .medium))
+                    Text("Sign IPA").font(.system(size: 13, weight: .bold))
                 }
                 .foregroundStyle(Color.dtAccent).frame(minWidth: 92, minHeight: 60)
             }
@@ -208,13 +208,13 @@ struct AppPageView: View {
                     Circle().trim(from: 0, to: max(0.03, downloader.progress)).stroke(Color.dtAccent, style: StrokeStyle(lineWidth: 4, lineCap: .round)).rotationEffect(.degrees(-90))
                 }
                 .frame(width: 30, height: 30)
-                Text("\(Int(downloader.progress * 100))%").font(.system(size: 16, weight: .bold))
+                Text("\(Int(downloader.progress * 100))%").font(.system(size: 13, weight: .bold))
             case .done:
-                Image(systemName: "checkmark.circle.fill").font(.system(size: 26, weight: .medium))
-                Text("Ready").font(.system(size: 16, weight: .bold))
+                Image(systemName: "checkmark.circle.fill").font(.system(size: 21, weight: .medium))
+                Text("Ready").font(.system(size: 13, weight: .bold))
             default:
-                Image(systemName: "arrow.down.circle").font(.system(size: 26, weight: .medium))
-                Text("Download").font(.system(size: 16, weight: .bold))
+                Image(systemName: "arrow.down.circle").font(.system(size: 21, weight: .medium))
+                Text("Download").font(.system(size: 13, weight: .bold))
             }
         }
         .foregroundStyle(Color.dtAccent).frame(minWidth: 92, minHeight: 60)
@@ -274,17 +274,17 @@ private struct AppHeroPage: View {
         HStack(alignment: .top, spacing: 14) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 14) {
-                    AppIconView(url: app.icon, name: app.name, size: 78)
+                    AppIconView(url: app.icon, name: app.name, size: 62)
                         .shadow(color: Color.dtAccent.opacity(0.35), radius: 14)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(app.name).font(.system(size: 22, weight: .heavy)).lineLimit(3)
-                        if !app.developer.isEmpty { Text(app.developer).font(.system(size: 14, design: .monospaced)).foregroundStyle(Color.dtAccent).lineLimit(1) }
+                        Text(app.name).font(.system(size: 18, weight: .heavy)).lineLimit(3)
+                        if !app.developer.isEmpty { Text(app.developer).font(.system(size: 11, design: .monospaced)).foregroundStyle(Color.dtAccent).lineLimit(1) }
                         Text(app.bid).font(.system(size: 12, design: .monospaced)).foregroundStyle(Color.dtAccent.opacity(0.85)).lineLimit(1).minimumScaleFactor(0.7)
                     }
                 }
-                Text(app.repoName.uppercased() + " EDITION").font(.system(size: 14, weight: .heavy)).tracking(2).foregroundStyle(Color.dtAccent)
+                Text(app.repoName.uppercased() + " EDITION").font(.system(size: 11, weight: .heavy)).tracking(2).foregroundStyle(Color.dtAccent)
                 if !app.subtitle.isEmpty {
-                    Text(app.subtitle).font(.system(size: 15)).foregroundStyle(.white.opacity(0.85)).fixedSize(horizontal: false, vertical: true)
+                    Text(app.subtitle).font(.system(size: 12)).foregroundStyle(.white.opacity(0.85)).fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer(minLength: 0)
@@ -293,13 +293,13 @@ private struct AppHeroPage: View {
                 stat(sizeText, "SIZE")
                 stat(updatedText, "UPDATED")
             }
-            .frame(width: 104)
+            .frame(width: 90)
         }
     }
 
     private func stat(_ v: String, _ k: String) -> some View {
         VStack(spacing: 3) {
-            Text(v).font(.system(size: 17, weight: .bold)).foregroundStyle(Color.dtAccent).lineLimit(1).minimumScaleFactor(0.6)
+            Text(v).font(.system(size: 14, weight: .bold)).foregroundStyle(Color.dtAccent).lineLimit(1).minimumScaleFactor(0.6)
             Text(k).font(.system(size: 11, weight: .medium)).tracking(1.5).foregroundStyle(.secondary)
         }
     }
@@ -313,7 +313,7 @@ private struct AppHeroPage: View {
                         AsyncImage(url: u) { p in
                             if let img = p.image { img.resizable().scaledToFill() } else { Color.white.opacity(0.06).overlay(ProgressView()) }
                         }
-                        .frame(width: 170, height: 340).clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                        .frame(width: 120, height: 240).clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                         .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(Color.white.opacity(0.1)))
                     }
                 }
@@ -322,13 +322,13 @@ private struct AppHeroPage: View {
     }
 
     private func sectionTitle(_ t: String) -> some View {
-        Text(t).font(.system(size: 16, weight: .heavy)).tracking(4).foregroundStyle(.secondary)
+        Text(t).font(.system(size: 13, weight: .heavy)).tracking(4).foregroundStyle(.secondary)
     }
 
     private var versions: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("\(app.versions.count) Version\(app.versions.count == 1 ? "" : "s") Available")
-                .font(.system(size: 19, weight: .bold)).foregroundStyle(.secondary)
+                .font(.system(size: 15, weight: .bold)).foregroundStyle(.secondary)
             ForEach(app.versions) { v in versionRow(v) }
             if downloader.state != .idle { serverCard }
         }
@@ -343,19 +343,19 @@ private struct AppHeroPage: View {
                     if on && downloader.state == .running {
                         Circle().trim(from: 0, to: max(0.03, downloader.progress)).stroke(Color.dtAccent, style: StrokeStyle(lineWidth: 4, lineCap: .round)).rotationEffect(.degrees(-90))
                     } else if on && downloader.state == .done {
-                        Image(systemName: "arrow.down.circle.fill").foregroundStyle(Color.dtAccent).font(.system(size: 26))
+                        Image(systemName: "arrow.down.circle.fill").foregroundStyle(Color.dtAccent).font(.system(size: 21))
                     } else {
-                        Image(systemName: "arrow.down").foregroundStyle(Color.dtAccent).font(.system(size: 17, weight: .bold))
+                        Image(systemName: "arrow.down").foregroundStyle(Color.dtAccent).font(.system(size: 14, weight: .bold))
                     }
                 }
                 .frame(width: 42, height: 42)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("v" + v.version).font(.system(size: 21, weight: .bold)).foregroundStyle(.white)
+                    Text("v" + v.version).font(.system(size: 17, weight: .bold)).foregroundStyle(.white)
                     Text(on ? statusText(v) : (v.size > 0 ? ByteCountFormatter.string(fromByteCount: v.size, countStyle: .file) : v.date))
-                        .font(.system(size: 15)).foregroundStyle(.secondary)
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
                 }
                 Spacer()
-                if on { Image(systemName: "checkmark").font(.system(size: 22, weight: .bold)).foregroundStyle(Color.dtAccent) }
+                if on { Image(systemName: "checkmark").font(.system(size: 18, weight: .bold)).foregroundStyle(Color.dtAccent) }
             }
             .padding(14)
             .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(on ? Color.dtAccent.opacity(0.10) : Color.white.opacity(0.05)))
@@ -376,19 +376,19 @@ private struct AppHeroPage: View {
     private var serverCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("Server Download").font(.system(size: 17, weight: .bold)).foregroundStyle(.secondary)
+                Text("Server Download").font(.system(size: 14, weight: .bold)).foregroundStyle(.secondary)
                 Spacer()
-                Text("\(Int(downloader.progress * 100))%").font(.system(size: 17, weight: .bold)).foregroundStyle(Color.dtAccent)
+                Text("\(Int(downloader.progress * 100))%").font(.system(size: 14, weight: .bold)).foregroundStyle(Color.dtAccent)
             }
             ProgressView(value: downloader.progress).tint(Color.dtAccent)
             HStack(spacing: 8) {
                 Image(systemName: "arrow.down.square.fill").foregroundStyle(.secondary)
                 Text(downloader.state == .running && downloader.received == 0 ? "Connecting…" : byteLine)
-                    .font(.system(size: 14, design: .monospaced)).foregroundStyle(.secondary)
+                    .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
             }
             HStack(spacing: 8) {
                 Image(systemName: "globe").foregroundStyle(Color.dtAccent)
-                Text(chosen?.url?.host ?? "").font(.system(size: 15, design: .monospaced)).foregroundStyle(Color.dtAccent)
+                Text(chosen?.url?.host ?? "").font(.system(size: 12, design: .monospaced)).foregroundStyle(Color.dtAccent)
             }
         }
         .padding(16)
@@ -406,8 +406,8 @@ private struct AppHeroPage: View {
             HStack(spacing: 12) {
                 Image(systemName: "wand.and.stars").foregroundStyle(Color.dtAccent).frame(width: 28)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Dylibs, frameworks & tools").font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
-                    Text("Saved libraries, Decrypt & Inject, IPA tools").font(.system(size: 13)).foregroundStyle(.secondary)
+                    Text("Dylibs, frameworks & tools").font(.system(size: 14, weight: .semibold)).foregroundStyle(.white)
+                    Text("Saved libraries, Decrypt & Inject, IPA tools").font(.system(size: 10)).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Image(systemName: "chevron.right").foregroundStyle(.secondary)
@@ -522,15 +522,15 @@ private struct SignOptionsPage: View {
                 Menu("Delete a preset") { ForEach(presets.items) { p in Button(p.name, role: .destructive) { presets.delete(p) } } }
             }
         } label: {
-            Label("Presets", systemImage: "slider.horizontal.below.rectangle").font(.system(size: 13, weight: .bold)).foregroundStyle(Color.dtAccent)
+            Label("Presets", systemImage: "slider.horizontal.below.rectangle").font(.system(size: 10, weight: .bold)).foregroundStyle(Color.dtAccent)
         }
     }
 
     private var thinCard: some View {
         Toggle(isOn: $thin) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Thin to arm64 only").font(.system(size: 17, weight: .semibold))
-                Text("Drops other architectures: about 30% smaller, A8+ devices").font(.system(size: 13)).foregroundStyle(.secondary)
+                Text("Thin to arm64 only").font(.system(size: 14, weight: .semibold))
+                Text("Drops other architectures: about 30% smaller, A8+ devices").font(.system(size: 10)).foregroundStyle(.secondary)
             }
         }
         .tint(Color.dtAccent).padding(14)
@@ -538,7 +538,7 @@ private struct SignOptionsPage: View {
     }
 
     private func title(_ t: String) -> some View {
-        Text(t).font(.system(size: 14, weight: .heavy)).tracking(4).foregroundStyle(.secondary).padding(.top, 4)
+        Text(t).font(.system(size: 11, weight: .heavy)).tracking(4).foregroundStyle(.secondary).padding(.top, 4)
     }
 
     // MARK: cards
@@ -548,13 +548,13 @@ private struct SignOptionsPage: View {
             HStack {
                 Image(systemName: downloader.state == .done ? "checkmark.circle.fill" : "arrow.down.circle.fill").foregroundStyle(Color.dtAccent)
                 Text(downloader.state == .done ? "Downloaded \(app.name)" : "Downloading \(app.name)")
-                    .font(.system(size: 17, weight: .bold)).lineLimit(1)
+                    .font(.system(size: 14, weight: .bold)).lineLimit(1)
                 Spacer()
-                Text("\(Int(downloader.progress * 100))%").font(.system(size: 17, weight: .bold)).foregroundStyle(Color.dtAccent)
+                Text("\(Int(downloader.progress * 100))%").font(.system(size: 14, weight: .bold)).foregroundStyle(Color.dtAccent)
             }
             ProgressView(value: downloader.progress).tint(Color.dtAccent)
             Text(downloader.state == .done ? "Everything is ready. Tap Sign IPA." : "Set your options now. Tap Sign IPA any time and it starts as soon as the download finishes.")
-                .font(.system(size: 14)).foregroundStyle(.secondary)
+                .font(.system(size: 11)).foregroundStyle(.secondary)
             if case .failed(let m) = downloader.state { Text(m).font(.footnote).foregroundStyle(.red) }
         }
         .padding(16).background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color.white.opacity(0.06)))
@@ -564,15 +564,15 @@ private struct SignOptionsPage: View {
         Button { showCert = true } label: {
             HStack(spacing: 14) {
                 Image(systemName: certs.active == nil ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                    .font(.system(size: 30)).foregroundStyle(certs.active == nil ? .orange : Color.dtAccent)
+                    .font(.system(size: 24)).foregroundStyle(certs.active == nil ? .orange : Color.dtAccent)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(certs.active == nil ? "NO CERTIFICATE" : "USING YOUR SAVED CERTIFICATE")
                         .font(.system(size: 11, weight: .heavy)).tracking(1.5).foregroundStyle(Color.dtAccent)
-                    Text(certs.active?.name ?? "Add a .p12 and profile").font(.system(size: 22, weight: .bold)).foregroundStyle(.white).lineLimit(1)
-                    Text(certDetail).font(.system(size: 14)).foregroundStyle(.secondary).lineLimit(1)
+                    Text(certs.active?.name ?? "Add a .p12 and profile").font(.system(size: 18, weight: .bold)).foregroundStyle(.white).lineLimit(1)
+                    Text(certDetail).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer()
-                Image(systemName: "gearshape.fill").font(.system(size: 20)).foregroundStyle(.white)
+                Image(systemName: "gearshape.fill").font(.system(size: 16)).foregroundStyle(.white)
                     .frame(width: 52, height: 52).background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.white.opacity(0.1)))
             }
             .padding(14)
@@ -596,12 +596,12 @@ private struct SignOptionsPage: View {
             HStack(spacing: 14) {
                 Group {
                     if let d = iconPNG, let ui = UIImage(data: d) { Image(uiImage: ui).resizable().scaledToFill() }
-                    else { AppIconView(url: app.icon, name: app.name, size: 84) }
+                    else { AppIconView(url: app.icon, name: app.name, size: 67) }
                 }
-                .frame(width: 84, height: 84).clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .frame(width: 64, height: 64).clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Replace app icon").font(.system(size: 19, weight: .bold)).foregroundStyle(.white)
-                    Text("PNG/JPEG — auto-resized to required sizes").font(.system(size: 14)).foregroundStyle(.secondary)
+                    Text("Replace app icon").font(.system(size: 15, weight: .bold)).foregroundStyle(.white)
+                    Text("PNG/JPEG — auto-resized to required sizes").font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Image(systemName: "chevron.right").foregroundStyle(.secondary)
@@ -624,12 +624,12 @@ private struct SignOptionsPage: View {
 
     private func field(_ icon: String, _ label: String, _ text: Binding<String>, mono: Bool = false) -> some View {
         HStack(spacing: 14) {
-            Image(systemName: icon).font(.system(size: 17, weight: .bold)).foregroundStyle(Color.dtAccent)
+            Image(systemName: icon).font(.system(size: 14, weight: .bold)).foregroundStyle(Color.dtAccent)
                 .frame(width: 44, height: 44).background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.dtAccent.opacity(0.14)))
             VStack(alignment: .leading, spacing: 2) {
-                Text(label).font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary)
+                Text(label).font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
                 TextField(label, text: text).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    .font(mono ? .system(size: 17, design: .monospaced) : .system(size: 17))
+                    .font(mono ? .system(size: 14, design: .monospaced) : .system(size: 14))
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
@@ -657,7 +657,7 @@ private struct SignOptionsPage: View {
     private func flagRow(_ f: Flag) -> some View {
         Toggle(isOn: Binding(get: { opts[keyPath: f.2] }, set: { opts[keyPath: f.2] = $0 })) {
             VStack(alignment: .leading, spacing: 1) {
-                Text(f.0).font(.system(size: 16))
+                Text(f.0).font(.system(size: 13))
                 if !f.1.isEmpty { Text(f.1).font(.system(size: 12)).foregroundStyle(.secondary) }
             }
         }
@@ -667,11 +667,11 @@ private struct SignOptionsPage: View {
     private func groupHeader(_ title: String, _ icon: String, _ n: Int, _ isOpen: Bool, _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 14) {
-                Image(systemName: icon).font(.system(size: 18, weight: .bold)).foregroundStyle(Color.dtAccent)
+                Image(systemName: icon).font(.system(size: 14, weight: .bold)).foregroundStyle(Color.dtAccent)
                     .frame(width: 50, height: 50).background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.dtAccent.opacity(0.14)))
-                Text(title).font(.system(size: 20, weight: .bold)).foregroundStyle(.white)
+                Text(title).font(.system(size: 16, weight: .bold)).foregroundStyle(.white)
                 Spacer()
-                if n > 0 { Text("\(n)").font(.system(size: 14, weight: .bold)).foregroundStyle(Color.dtAccent).padding(.horizontal, 10).padding(.vertical, 4).background(Capsule().fill(Color.dtAccent.opacity(0.18))) }
+                if n > 0 { Text("\(n)").font(.system(size: 11, weight: .bold)).foregroundStyle(Color.dtAccent).padding(.horizontal, 10).padding(.vertical, 4).background(Capsule().fill(Color.dtAccent.opacity(0.18))) }
                 Image(systemName: isOpen ? "chevron.up" : "chevron.down").foregroundStyle(Color.dtAccent)
             }
             .padding(12)
@@ -691,8 +691,8 @@ private struct SignOptionsPage: View {
                 ForEach(opts.plistSet.keys.sorted(), id: \.self) { k in
                     Divider().overlay(Color.white.opacity(0.06))
                     HStack {
-                        Text(k).font(.system(size: 14, design: .monospaced)).foregroundStyle(Color.dtAccent)
-                        Text(opts.plistSet[k] ?? "").font(.system(size: 14, design: .monospaced)).foregroundStyle(.white)
+                        Text(k).font(.system(size: 11, design: .monospaced)).foregroundStyle(Color.dtAccent)
+                        Text(opts.plistSet[k] ?? "").font(.system(size: 11, design: .monospaced)).foregroundStyle(.white)
                         Spacer()
                         Button { opts.plistSet[k] = nil } label: { Image(systemName: "minus.circle.fill").foregroundStyle(.red) }.buttonStyle(.plain)
                     }
@@ -706,10 +706,10 @@ private struct SignOptionsPage: View {
                         let k = plistKey.trimmingCharacters(in: .whitespaces)
                         guard !k.isEmpty else { return }
                         opts.plistSet[k] = plistValue; plistKey = ""; plistValue = ""
-                    } label: { Image(systemName: "plus.circle.fill").font(.system(size: 22)).foregroundStyle(Color.dtAccent) }
+                    } label: { Image(systemName: "plus.circle.fill").font(.system(size: 18)).foregroundStyle(Color.dtAccent) }
                     .buttonStyle(.plain)
                 }
-                .font(.system(size: 14, design: .monospaced)).padding(.horizontal, 16).padding(.vertical, 10)
+                .font(.system(size: 11, design: .monospaced)).padding(.horizontal, 16).padding(.vertical, 10)
             }
         }
         .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color.white.opacity(0.06)))
@@ -722,7 +722,7 @@ private struct SignOptionsPage: View {
             segRow("Inject Path", ["@executable", "@rpath"], opts.injectPath == "@rpath" ? 1 : 0) { opts.injectPath = $0 == 1 ? "@rpath" : "@executable_path" }
             segRow("Inject Folder", ["/", "Frameworks/"], opts.injectFolder == "/" ? 0 : 1) { opts.injectFolder = $0 == 0 ? "/" : "Frameworks/" }
             Text(opts.injectPath + (opts.injectFolder == "/" ? "/" : "/Frameworks/") + "xxx.dylib")
-                .font(.system(size: 16, design: .monospaced)).foregroundStyle(.secondary)
+                .font(.system(size: 13, design: .monospaced)).foregroundStyle(.secondary)
                 .padding(12).frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.black.opacity(0.4)))
             ForEach($injected) { $d in
@@ -737,8 +737,8 @@ private struct SignOptionsPage: View {
             }
             Button { importing = true } label: {
                 VStack(spacing: 6) {
-                    Image(systemName: "plus").font(.system(size: 24)).foregroundStyle(.secondary)
-                    Text("Add library (.dylib)").font(.system(size: 17, weight: .bold)).foregroundStyle(.white)
+                    Image(systemName: "plus").font(.system(size: 19)).foregroundStyle(.secondary)
+                    Text("Add library (.dylib)").font(.system(size: 14, weight: .bold)).foregroundStyle(.white)
                 }
                 .frame(maxWidth: .infinity).padding(.vertical, 26)
                 .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Color.white.opacity(0.18), style: StrokeStyle(lineWidth: 1.5, dash: [6, 5])))
@@ -750,10 +750,10 @@ private struct SignOptionsPage: View {
 
     private func segRow(_ label: String, _ items: [String], _ sel: Int, _ pick: @escaping (Int) -> Void) -> some View {
         HStack(spacing: 10) {
-            Text(label).font(.system(size: 16)).frame(width: 84, alignment: .leading)
+            Text(label).font(.system(size: 13)).frame(width: 84, alignment: .leading)
             ForEach(0..<items.count, id: \.self) { i in
                 Button { pick(i) } label: {
-                    Text(items[i]).font(.system(size: 15, weight: .semibold, design: .monospaced))
+                    Text(items[i]).font(.system(size: 12, weight: .semibold, design: .monospaced))
                         .foregroundStyle(sel == i ? Color.dtAccent : .secondary)
                         .frame(maxWidth: .infinity).padding(.vertical, 14)
                         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(sel == i ? Color.dtAccent.opacity(0.14) : Color.black.opacity(0.35)))
@@ -766,7 +766,7 @@ private struct SignOptionsPage: View {
 
     private var signButton: some View {
         Button(action: onSign) {
-            Label("Sign IPA", systemImage: "signature").font(.system(size: 20, weight: .bold)).foregroundStyle(Color.dtOnAccent)
+            Label("Sign IPA", systemImage: "signature").font(.system(size: 16, weight: .bold)).foregroundStyle(Color.dtOnAccent)
                 .frame(maxWidth: .infinity).padding(.vertical, 18)
                 .background(Capsule().fill(Color.dtAccent))
                 .shadow(color: Color.dtAccent.opacity(0.35), radius: 12, y: 4)
@@ -827,7 +827,7 @@ private struct SignRunPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(steps) { s in row(s) }
-                if let error { Text(error).font(.system(size: 14)).foregroundStyle(.red).padding(.top, 8) }
+                if let error { Text(error).font(.system(size: 11)).foregroundStyle(.red).padding(.top, 8) }
                 if let r = result { resultCard(r) }
                 if !log.isEmpty { logCard }
                 Color.clear.frame(height: 40)
@@ -841,12 +841,12 @@ private struct SignRunPage: View {
     private func row(_ s: Step) -> some View {
         HStack(spacing: 14) {
             ZStack(alignment: .bottomTrailing) {
-                Image(systemName: s.icon).font(.system(size: 24)).foregroundStyle(.white.opacity(0.8)).frame(width: 40, height: 40)
+                Image(systemName: s.icon).font(.system(size: 19)).foregroundStyle(.white.opacity(0.8)).frame(width: 40, height: 40)
                 badge(s.state)
             }
-            Text(s.title).font(.system(size: 19)).foregroundStyle(s.state == 0 ? Color.secondary : Color.white)
+            Text(s.title).font(.system(size: 15)).foregroundStyle(s.state == 0 ? Color.secondary : Color.white)
             Spacer()
-            if let ms = s.ms { Text("\(ms)ms").font(.system(size: 14, design: .monospaced)).foregroundStyle(.secondary) }
+            if let ms = s.ms { Text("\(ms)ms").font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary) }
         }
         .padding(.vertical, 8)
     }
@@ -854,20 +854,20 @@ private struct SignRunPage: View {
     @ViewBuilder private func badge(_ state: Int) -> some View {
         switch state {
         case 1: ProgressView().scaleEffect(0.6).frame(width: 18, height: 18)
-        case 2: Image(systemName: "checkmark.circle.fill").font(.system(size: 17)).foregroundStyle(.green).background(Circle().fill(.black))
-        case 3: Image(systemName: "xmark.circle.fill").font(.system(size: 17)).foregroundStyle(.red).background(Circle().fill(.black))
+        case 2: Image(systemName: "checkmark.circle.fill").font(.system(size: 14)).foregroundStyle(.green).background(Circle().fill(.black))
+        case 3: Image(systemName: "xmark.circle.fill").font(.system(size: 14)).foregroundStyle(.red).background(Circle().fill(.black))
         default: EmptyView()
         }
     }
 
     private func resultCard(_ r: SignedBuild) -> some View {
         VStack(spacing: 14) {
-            Text(r.name).font(.system(size: 22, weight: .bold))
-            Text("v" + r.version + " · " + r.sizeString + " · " + r.certName).font(.system(size: 14)).foregroundStyle(.secondary)
+            Text(r.name).font(.system(size: 18, weight: .bold))
+            Text("v" + r.version + " · " + r.sizeString + " · " + r.certName).font(.system(size: 11)).foregroundStyle(.secondary)
             HStack(spacing: 12) {
                 InstallSignedButton(build: r)
                 ShareLink(item: r.ipaURL) {
-                    Label("Share", systemImage: "square.and.arrow.up").font(.system(size: 16, weight: .semibold))
+                    Label("Share", systemImage: "square.and.arrow.up").font(.system(size: 13, weight: .semibold))
                         .padding(.horizontal, 16).padding(.vertical, 10).background(Capsule().fill(Color.white.opacity(0.1)))
                 }
             }
@@ -880,7 +880,7 @@ private struct SignRunPage: View {
     private var logCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             Button { withAnimation { showLog.toggle() } } label: {
-                HStack { Text("Signer log").font(.system(size: 15, weight: .semibold)); Spacer(); Image(systemName: showLog ? "chevron.up" : "chevron.down") }
+                HStack { Text("Signer log").font(.system(size: 12, weight: .semibold)); Spacer(); Image(systemName: showLog ? "chevron.up" : "chevron.down") }
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.plain)
