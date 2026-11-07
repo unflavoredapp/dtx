@@ -11,7 +11,7 @@ struct SignerView: View {
     @ObservedObject private var results = SignedBuildStore.shared    // IPAs signed on this phone
 
     enum Source: String, CaseIterable, Identifiable {
-        case decrypted = "Decrypted", repos = "Repos", files = "Files"
+        case decrypted = "Decrypted", injected = "Injected", repos = "Repos", files = "Files"
         var id: String { rawValue }
     }
 
@@ -103,8 +103,28 @@ struct SignerView: View {
     @ViewBuilder private var sourceSection: some View {
         switch source {
         case .decrypted: decryptedSection
+        case .injected: injectedSection
         case .repos: reposSection
         case .files: filesSection
+        }
+    }
+
+    private var injectedSection: some View {
+        Section("Injected, not signed yet") {
+            let list: [SignedBuild] = results.entries.filter { $0.certName == BatchInjector.unsignedTag }
+            if list.isEmpty { Text("Nothing here. Use Batch to inject dylibs first.").foregroundStyle(.secondary) }
+            ForEach(list) { (b: SignedBuild) in
+                Button { Task { await signInjected(b) } } label: { pickRow(b.name, b.version + " • " + b.bundleID) }
+                    .disabled(busy)
+            }
+        }
+    }
+
+    private func signInjected(_ b: SignedBuild) async {
+        await run(b.name) {
+            let dest = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".ipa")
+            try FileManager.default.copyItem(at: b.ipaURL, to: dest)
+            return dest
         }
     }
 
@@ -156,7 +176,7 @@ struct SignerView: View {
     private func repoRow(_ app: AppEntry) -> some View {
         let version: String = app.current.map { "v" + $0.version } ?? ""
         let sub: String = version + " • " + app.repoName
-        let link: String? = app.current?.downloadURL
+        let link: String? = app.current?.url?.absoluteString
         return Button {
             Task { await signRemote(link, name: app.name) }
         } label: {

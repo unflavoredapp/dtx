@@ -173,7 +173,6 @@ final class NativeInstaller: ObservableObject {
             progress = 1
             finishTimings()
             stage = .done
-            ZefvVPS.report(bundle: bundleID, version: version, name: name, stage: "installed")
         } catch is CancellationError {
             stage = .idle
             job = nil
@@ -291,7 +290,6 @@ final class NativeInstaller: ObservableObject {
             progress = 1
             finishTimings()
             stage = .done
-            ZefvVPS.report(bundle: bundleID, version: version, name: name, stage: "installed")
         } catch is CancellationError {
             stage = .idle; job = nil
             pre = nil
