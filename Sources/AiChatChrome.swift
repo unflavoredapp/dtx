@@ -203,6 +203,7 @@ struct ScreenHost: View {
     @EnvironmentObject private var store: RepoStore
     @EnvironmentObject private var session: Session
     @State private var drawer = false
+    @ObservedObject private var theme = UserTheme.shared      // redraws with the new accent; never rebuilds the page
 
     var body: some View {
         GeometryReader { geo in
@@ -236,6 +237,9 @@ struct ScreenHost: View {
         }
         .preferredColorScheme(.dark)
         .tint(.dtAccent)
+        .sheet(item: Binding(get: { store.screen != nil ? store.pickedApp : nil }, set: { store.pickedApp = $0 })) { app in
+            AppPageView(app: app).environmentObject(store).environmentObject(session)
+        }
         .onChange(of: store.hostDrawerTick) { _ in set(true) }
     }
 

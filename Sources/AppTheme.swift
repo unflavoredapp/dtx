@@ -9,6 +9,8 @@ final class UserTheme: ObservableObject {
 
     /// bumps on every change so open screens can rebuild with the new colour
     @Published private(set) var rev = 0
+    /// bumps on gradual changes (the auto colour cycle): views recolour when they next draw, but nothing is rebuilt or dismissed
+    @Published private(set) var tick = 0
     private(set) var hex: String?
 
     private init() { hex = UserDefaults.standard.string(forKey: Self.key) }
@@ -21,11 +23,11 @@ final class UserTheme: ObservableObject {
         return AppPalette.luma(c) > 0.6 ? .black : .white
     }
 
-    func set(hex: String?) {
+    func set(hex: String?, rebuild: Bool = true) {
         self.hex = hex
         if let hex { UserDefaults.standard.set(hex, forKey: Self.key) }
         else { UserDefaults.standard.removeObject(forKey: Self.key) }
-        rev += 1
+        if rebuild { rev += 1 } else { tick += 1 }
     }
 }
 

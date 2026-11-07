@@ -87,11 +87,12 @@ final class AppTheme: ObservableObject {
     private let d = UserDefaults.standard
     private var bag = Set<AnyCancellable>()
     private var syncing = false
+    private var cycleStep = false      // true while the auto cycle moves the accent: recolour without rebuilding screens
 
     @Published var accentHex: String {
         didSet {
             guard !syncing else { return }
-            UserTheme.shared.set(hex: accentHex.uppercased() == Theme.defaultAccent ? nil : accentHex.uppercased())
+            UserTheme.shared.set(hex: accentHex.uppercased() == Theme.defaultAccent ? nil : accentHex.uppercased(), rebuild: !cycleStep)
         }
     }
     @Published var background: ThemeBackground { didSet { d.set(background.rawValue, forKey: Theme.keyBackground) } }
@@ -112,7 +113,7 @@ final class AppTheme: ObservableObject {
                 try? await Task.sleep(nanoseconds: 10_000_000_000)
                 guard !Task.isCancelled, let self else { return }
                 let next = hueShifted(Color(hex: self.accentHex), by: 0.03)
-                if let h = next.hexString() { self.accentHex = h.uppercased() }
+                if let h = next.hexString() { self.cycleStep = true; self.accentHex = h.uppercased(); self.cycleStep = false }
             }
         }
     }
