@@ -11,6 +11,14 @@ struct InstallSignedButton: View {
     private var working: Bool { installer.isActive && installer.job?.bundleID == build.bundleID }
 
     var body: some View {
+        if build.certName == BatchInjector.unsignedTag {
+            Text("Unsigned").font(.caption2.weight(.bold)).foregroundStyle(.secondary)
+        } else {
+            installButton
+        }
+    }
+
+    private var installButton: some View {
         Button { start() } label: {
             if working { ProgressView() }
             else { Text("Install").font(.caption.weight(.bold)).padding(.horizontal, 12).padding(.vertical, 6)

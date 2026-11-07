@@ -17,7 +17,7 @@ struct SignedView: View {
                                 Text(b.name).font(.system(size: 20, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
                                 Text([b.version.isEmpty ? nil : b.version, b.bundleID].compactMap { $0 }.joined(separator: " • "))
                                     .font(.system(size: 15)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                                RowPill(text: "Signed on phone" + (b.sizeString.isEmpty ? "" : " · " + b.sizeString))
+                                RowPill(text: (b.certName == BatchInjector.unsignedTag ? "Injected · unsigned" : "Signed on phone") + (b.sizeString.isEmpty ? "" : " · " + b.sizeString))
                             }
                             Spacer(minLength: 0)
                             InstallSignedButton(build: b)

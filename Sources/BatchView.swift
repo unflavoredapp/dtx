@@ -264,7 +264,7 @@ struct BatchView: View {
     }
 
     private func addRepoApp(_ app: AppEntry) {
-        guard let link = app.current?.url?.absoluteString else { message = "\(app.name) has no download link."; return }
+        guard let link = app.current?.downloadURL else { message = "\(app.name) has no download link."; return }
         let version: String = app.current.map { "v" + $0.version } ?? ""
         let t = Target(id: "r-" + app.key, name: app.name, sub: version + " • " + app.repoName, remote: link, local: nil, added: true)
         if !extras.contains(where: { $0.id == t.id }) { extras.append(t) }
@@ -390,6 +390,6 @@ struct BatchRepoPicker: View {
                 }
             }
         }
-        .disabled(app.current?.url?.absoluteString == nil)
+        .disabled(app.current?.downloadURL == nil)
     }
 }

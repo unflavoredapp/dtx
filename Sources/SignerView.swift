@@ -176,7 +176,7 @@ struct SignerView: View {
     private func repoRow(_ app: AppEntry) -> some View {
         let version: String = app.current.map { "v" + $0.version } ?? ""
         let sub: String = version + " • " + app.repoName
-        let link: String? = app.current?.url?.absoluteString
+        let link: String? = app.current?.downloadURL
         return Button {
             Task { await signRemote(link, name: app.name) }
         } label: {
