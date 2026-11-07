@@ -145,8 +145,19 @@ nonisolated enum BatchInjector {
             let info = try PropertyListSerialization.propertyList(from: plist, format: nil) as? [String: Any]
             let exe = (info?["CFBundleExecutable"] as? String) ?? app.deletingPathExtension().lastPathComponent
             job.exeURL = app.appendingPathComponent(exe)
-            try? fm.removeItem(at: job.ipa)      // the unpacked tree is all we need now
         })
+
+        // two dylibs with the same file name get distinct names inside the app, so copies never overwrite each other
+        var used = Set<String>()
+        let names: [String] = dylibs.enumerated().map { i, d in
+            var n = d.url.lastPathComponent
+            if !used.insert(n.lowercased()).inserted {
+                let base = d.url.deletingPathExtension().lastPathComponent, ext = d.url.pathExtension
+                n = base + "-\(i)" + (ext.isEmpty ? "" : "." + ext)
+                used.insert(n.lowercased())
+            }
+            return n
+        }
 
         var copyIDs: [String] = []
         for (i, d) in dylibs.enumerated() {
@@ -154,7 +165,7 @@ nonisolated enum BatchInjector {
             copyIDs.append(id)
             nodes.append(DAGNode(id: id, deps: [p + "unpack"]) {
                 guard let app = job.appURL else { throw Failure(message: "App folder missing.") }
-                let dest = app.appendingPathComponent(d.url.lastPathComponent)
+                let dest = app.appendingPathComponent(names[i])
                 try? FileManager.default.removeItem(at: dest)
                 try FileManager.default.copyItem(at: d.url, to: dest)
             })
@@ -175,7 +186,7 @@ nonisolated enum BatchInjector {
             nodes.append(DAGNode(id: id, deps: [previous, p + "copy\(i)"]) {
                 guard let exe = job.exeURL else { throw Failure(message: "Executable missing.") }
                 try ZsignSigner.injectDylib(intoMachO: exe.path,
-                                            dylibPath: "@executable_path/" + d.url.lastPathComponent,
+                                            dylibPath: "@executable_path/" + names[i],
                                             weak: d.weak, createIfMissing: true)
             })
             previous = id
@@ -185,6 +196,7 @@ nonisolated enum BatchInjector {
             let fm = FileManager.default
             let payload = job.extracted.appendingPathComponent("Payload", isDirectory: true)
             try? fm.removeItem(at: job.output)
+            try? fm.removeItem(at: job.ipa)      // metadata has been read (pack waits for it), so the original is no longer needed
             try fm.zipItem(at: payload, to: job.output, shouldKeepParent: true, compressionMethod: .none)
         })
 

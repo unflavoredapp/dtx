@@ -302,9 +302,13 @@ struct BatchView: View {
         }
 
         let ownerMap = owner
-        let results = await DAGRunner.run(nodes, maxConcurrent: 4) { nodeID, state in
-            Task { @MainActor in
-                guard let tid = ownerMap[nodeID] else { return }
+        // Updates go through one ordered stream and are applied before the final states, so a late "running" can never overwrite "done".
+        var feedRef: AsyncStream<(String, DAGState)>.Continuation?
+        let updates = AsyncStream<(String, DAGState)> { feedRef = $0 }
+        guard let feed = feedRef else { return }
+        let applier = Task { @MainActor in
+            for await (nodeID, state) in updates {
+                guard let tid = ownerMap[nodeID] else { continue }
                 switch state {
                 case .running: phases[tid] = .working(BatchInjector.stageLabel(nodeID))
                 case .done: progressDone[tid, default: 0] += 1
@@ -313,6 +317,9 @@ struct BatchView: View {
                 }
             }
         }
+        let results = await DAGRunner.run(nodes, maxConcurrent: 4) { nodeID, state in feed.yield((nodeID, state)) }
+        feed.finish()
+        await applier.value
 
         var okCount = 0
         for job in jobs {
@@ -321,8 +328,10 @@ struct BatchView: View {
             else if case .working = phases[job.id] ?? .waiting { phases[job.id] = .failed("Skipped after an earlier step failed.") }
             job.cleanup()
         }
-        for t in chosen where t.id.hasPrefix("f-") { if let u = t.local { try? FileManager.default.removeItem(at: u) } }
-        extras.removeAll { e in chosen.contains(where: { $0.id == e.id && e.id.hasPrefix("f-") }) }
+        // loose files are only cleaned up once they went through; a failed one stays so you can retry without importing it again
+        let finished = Set(jobs.filter { results[$0.id + "/save"] == .done }.map(\.id))
+        for t in chosen where t.id.hasPrefix("f-") && finished.contains(t.id) { if let u = t.local { try? FileManager.default.removeItem(at: u) } }
+        extras.removeAll { e in e.id.hasPrefix("f-") && finished.contains(e.id) }
         picked = picked.filter { id in targets.contains(where: { $0.id == id }) }
         running = false
         ActivityStore.shared.log("Batch", "injected \(payload.count) dylib\(payload.count == 1 ? "" : "s") into \(okCount) of \(chosen.count) app\(chosen.count == 1 ? "" : "s") (unsigned)")
