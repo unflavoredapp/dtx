@@ -32,6 +32,7 @@ struct AiSidebar: View {
     let onClose: () -> Void
 
     @EnvironmentObject private var session: Session
+    @EnvironmentObject private var store: RepoStore
     @State private var query = ""
     @State private var searching = false
     @State private var showSettings = false
@@ -80,13 +81,13 @@ struct AiSidebar: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
                     profileHeader
-                    action("circle.grid.3x3.fill", "Browse") { onClose(); showBrowse = true }
-                    action("square.grid.2x2.fill", "Library") { onClose(); showLibrary = true }
-                    action(UIImage(systemName: "signature") != nil ? "signature" : "pencil.and.scribble", "Signed") { onClose(); showSigned = true }
-                    action("pencil.tip.crop.circle", "Signer") { onClose(); showSigner = true }
-                    action("lock.open", "Decrypt") { onClose(); showDecrypt = true }
-                    action("checkmark.seal", "Certificate") { onClose(); showCertificate = true }
-                    action("wrench.and.screwdriver", "Tools") { onClose(); showTools = true }
+                    action("circle.grid.3x3.fill", "Browse", detail: "Opened your sources · \(store.repos.count) repo\(store.repos.count == 1 ? "" : "s")") { onClose(); showBrowse = true }
+                    action("square.grid.2x2.fill", "Library", detail: "Opened the app library · \(store.apps.count) app\(store.apps.count == 1 ? "" : "s") indexed") { onClose(); showLibrary = true }
+                    action(UIImage(systemName: "signature") != nil ? "signature" : "pencil.and.scribble", "Signed", detail: "Opened signed builds · \(SignedStore.shared.items.count) build\(SignedStore.shared.items.count == 1 ? "" : "s")") { onClose(); showSigned = true }
+                    action("pencil.tip.crop.circle", "Signer", detail: "Checked signing readiness") { onClose(); showSigner = true }
+                    action("lock.open", "Decrypt", detail: "Opened Decrypt & Inject") { onClose(); showDecrypt = true }
+                    action("checkmark.seal", "Certificate", detail: "Opened certificates") { onClose(); showCertificate = true }
+                    action("wrench.and.screwdriver", "Tools", detail: "Opened the tools hub") { onClose(); showTools = true }
                     if vm.latestReconProject != nil { action("plus.forwardslash.minus", "Code edits") { showEdits = true } }
                     ForEach((live.config.screens ?? []).filter { ($0.show ?? ["sidebar"]).contains("sidebar") }) { s in
                         action(s.icon ?? "square.grid.2x2", s.title) { openScreen = s }
@@ -186,8 +187,8 @@ struct AiSidebar: View {
             .padding(.horizontal, 12).padding(.top, 22).padding(.bottom, 6)
     }
 
-    private func action(_ icon: String, _ title: String, _ run: @escaping () -> Void) -> some View {
-        Button { ActivityStore.shared.log(title); run() } label: {
+    private func action(_ icon: String, _ title: String, detail: String? = nil, _ run: @escaping () -> Void) -> some View {
+        Button { ActivityStore.shared.log(title, detail); run() } label: {
             HStack(spacing: 16) {
                 Image(systemName: icon).font(.system(size: 20, weight: .regular)).frame(width: 28)
                 Text(title).font(.system(size: 19))
