@@ -5,7 +5,8 @@ struct SourceBrowseView: View {
     @EnvironmentObject var store: RepoStore
     let repo: RepoInfo
 
-    enum Order { case name, newest }
+    enum Order { case name, newest, size }
+    @AppStorage("dt.browse.twoCols") private var twoCols = false
 
     @State private var apps: [AppEntry] = []
     struct Chip: Identifiable { let name: String; let count: Int; var id: String { name } }
@@ -18,7 +19,11 @@ struct SourceBrowseView: View {
 
     private var list: [AppEntry] {
         var l = category.map { c in apps.filter { $0.category.caseInsensitiveCompare(c) == .orderedSame } } ?? apps
-        if order == .newest { l.sort { ($0.current?.date ?? "") > ($1.current?.date ?? "") } }
+        switch order {
+        case .newest: l.sort { ($0.current?.date ?? "") > ($1.current?.date ?? "") }
+        case .size: l.sort { ($0.current?.size ?? 0) > ($1.current?.size ?? 0) }
+        case .name: break
+        }
         return l
     }
 
@@ -35,9 +40,18 @@ struct SourceBrowseView: View {
                 if let news = meta?.news, !news.isEmpty { newsSection(news) }
                 if chips.count > 1 { chipsSection }
                 if !featured.isEmpty { featuredSection }
-                ForEach(shownList.prefix(shown)) { app in
-                    NavigationLink(value: app) { BrowseAppRow(app: app) }.buttonStyle(.plain)
-                    Divider().overlay(Color.dtLine)
+                if twoCols {
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                        ForEach(shownList.prefix(shown)) { app in
+                            NavigationLink(value: app) { BrowseAppCard(app: app) }.buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.top, 6)
+                } else {
+                    ForEach(shownList.prefix(shown)) { app in
+                        NavigationLink(value: app) { BrowseAppRow(app: app) }.buttonStyle(.plain)
+                        Divider().overlay(Color.dtLine)
+                    }
                 }
                 if shown < shownList.count { ProgressView().frame(maxWidth: .infinity).padding(.vertical, 16).onAppear { shown += 20 } }
                 if apps.isEmpty { Text(store.loading ? "Loading…" : "No apps in this source.").foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.top, 40) }
@@ -47,7 +61,13 @@ struct SourceBrowseView: View {
         .background(AppBackground())
         .withTopBar(.repos, title: repo.name.uppercased(), strip: "\(formatCount(Int64(apps.count))) Apps",
                     actions: [.search, .menu("line.3.horizontal.decrease.circle", [
-                        ("Name A to Z", { order = .name }), ("Newest first", { order = .newest }),
+                        ((order == .newest ? "✓ " : "") + "Recently updated", { order = .newest }),
+                        ((order == .name ? "✓ " : "") + "Name", { order = .name }),
+                        ((order == .size ? "✓ " : "") + "Size", { order = .size }),
+                        ((twoCols ? "" : "✓ ") + "List", { twoCols = false }),
+                        ((twoCols ? "✓ " : "") + "Two columns", { twoCols = true }),
+                        ("Refresh", { Task { await store.refresh() } }),
+                        ("Open repo.json", { if let u = URL(string: repo.url) { UIApplication.shared.open(u) } }),
                     ])], back: "Browse", titleIcon: meta?.icon)
         .task(id: store.apps.count) { rebuild() }
         .onChange(of: category) { _ in shown = 20 }
@@ -214,5 +234,35 @@ struct BrowseAppRow: View {
             }
         }
         .padding(.vertical, 14).contentShape(Rectangle())
+    }
+}
+
+
+/// The two-column card: icon and info button, name, bundle ID, then blurb and version.
+struct BrowseAppCard: View {
+    let app: AppEntry
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top) {
+                AppIconView(url: app.icon, name: app.name, size: 46)
+                Spacer()
+                Text("i").font(.system(size: 16, weight: .heavy, design: .serif)).foregroundStyle(Color.dtOnAccent)
+                    .frame(width: 30, height: 30).background(Circle().fill(Color.dtAccent))
+            }
+            Text(app.name).font(.system(size: 15, weight: .bold)).foregroundStyle(Color.dtAccent).lineLimit(2).multilineTextAlignment(.leading)
+            Text(app.bid).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            HStack(spacing: 6) {
+                Circle().stroke(Color.dtAccent, lineWidth: 2).frame(width: 9, height: 9)
+                Text(app.subtitle.isEmpty ? app.developer : app.subtitle).font(.system(size: 12)).foregroundStyle(.white).lineLimit(1)
+                Spacer(minLength: 0)
+                if let v = app.current?.version { Text(v).font(.system(size: 13, weight: .bold, design: .monospaced)).foregroundStyle(Color.dtAccent).lineLimit(1) }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
+        .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color.black.opacity(0.4)))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(Color.dtAccent.opacity(0.35), lineWidth: 1))
+        .contentShape(Rectangle())
     }
 }

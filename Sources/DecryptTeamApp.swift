@@ -31,7 +31,7 @@ struct RootView: View {
     @EnvironmentObject var session: Session
     @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var live = LiveSync.shared
-    @StateObject private var chatVM = AiDecryptViewModel()
+    @State private var chatVM = AiDecryptViewModel()   // not observed here, so typing never re-renders the whole app root
 
     var body: some View {
         Group {
@@ -69,12 +69,8 @@ struct RootView: View {
             }
             .onChange(of: store.showQuickBuild) { on in if on { store.showQuickBuild = false; store.screen = .decrypt } }
             .onChange(of: store.showTools) { on in if on { store.showTools = false; store.screen = .tools } }
-            .sheet(item: $store.pickedApp) { app in
-                NavigationStack {
-                    AppDetailView(app: app)
-                        .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Close") { store.pickedApp = nil } } }
-                }
-                .preferredColorScheme(.dark)
+            .sheet(item: Binding(get: { store.screen == nil ? store.pickedApp : nil }, set: { store.pickedApp = $0 })) { app in
+                AppPageView(app: app).environmentObject(store).environmentObject(session)
             }
     }
 }

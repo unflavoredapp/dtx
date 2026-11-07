@@ -25,7 +25,7 @@ struct HomeView: View {
             }
             .background(AppBackground())
             .withTopBar(.home)
-            .navigationDestination(for: AppEntry.self) { AppDetailView(app: $0) }
+            .navigationDestination(for: AppEntry.self) { AppPageView(app: $0) }
             .task { await load() }
             .refreshable { await load(); await store.refresh() }
             .sheet(isPresented: $showChangelog) { ChangelogView() }

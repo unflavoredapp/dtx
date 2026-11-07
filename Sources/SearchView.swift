@@ -66,7 +66,7 @@ struct SearchView: View {
             }
             .padding(.horizontal, 14)
             .background(AppBackground())
-            .navigationDestination(for: AppEntry.self) { AppDetailView(app: $0) }
+            .navigationDestination(for: AppEntry.self) { AppPageView(app: $0) }
             .withTopBar(.search, title: "Library", strip: mode == .device
                         ? DeviceTabView.strip(device.apps.count)
                         : (searcher.total > 0 ? "\(formatCount(Int64(searcher.total))) Apps" : nil))

@@ -34,7 +34,7 @@ struct ReposView: View {
             }
             .background(AppBackground())
             .navigationDestination(for: RepoInfo.self) { SourceBrowseView(repo: $0) }
-            .navigationDestination(for: AppEntry.self) { AppDetailView(app: $0) }
+            .navigationDestination(for: AppEntry.self) { AppPageView(app: $0) }
             .withTopBar(.repos, title: "Sources", actions: [.search, .text(editing ? "Done" : "Edit", { withAnimation { editing.toggle() } }), .icon("plus", { showAdd = true })])
             .sheet(isPresented: $showAdd) { AddRepoView() }
             .task(id: store.apps.count) { counts = Dictionary(grouping: store.apps, by: { $0.repoURL }).mapValues { $0.count } }

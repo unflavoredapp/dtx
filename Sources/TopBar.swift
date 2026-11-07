@@ -266,9 +266,19 @@ struct TopBarHost: ViewModifier {
                 .aiGlass(Capsule())
             }
             if let title {
-                Text(title).font(.system(size: 17, weight: .semibold)).foregroundStyle(.white)
-                    .lineLimit(1).minimumScaleFactor(0.7).frame(maxWidth: 150)
-                    .allowsHitTesting(false)
+                // app icon, then the name, with the count centred under it
+                VStack(spacing: 1) {
+                    HStack(spacing: 7) {
+                        if let titleIcon { AppIconView(url: titleIcon, name: title, size: 28) }
+                        Text(title).font(.system(size: 17, weight: .bold)).foregroundStyle(.white)
+                            .lineLimit(1).minimumScaleFactor(0.6)
+                    }
+                    if let strip {
+                        Text(strip).font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
+                .frame(maxWidth: 170)
+                .allowsHitTesting(false)
             }
         }
     }

@@ -46,7 +46,15 @@ struct QuickBuildView: View {
             .background(AppBackground())
             .navigationTitle("Start a build").navigationBarTitleDisplayMode(.inline)
             .navigationDestination(for: AppEntry.self) { AppDetailView(app: $0) }
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Close") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    HStack(spacing: 8) {
+                        Image("Logo").resizable().frame(width: 28, height: 28).clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                        Text("Decrypt").font(.system(size: 18, weight: .bold))
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) { Button("Close") { dismiss() } }
+            }
             .task {
                 searcher.minChars = 2
                 if let pending = store.pendingDecryptQuery { query = pending; store.pendingDecryptQuery = nil }
@@ -57,8 +65,8 @@ struct QuickBuildView: View {
     }
 }
 
-/// The server's analysis tools, on any IPA link.
-struct ToolsHubView: View {
+/// The analysis tools, on any IPA link.
+struct IPAInspectorView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var link = ""
 
@@ -80,7 +88,7 @@ struct ToolsHubView: View {
                 .padding(16)
             }
             .background(AppBackground())
-            .navigationTitle("Tools").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Inspect an IPA").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Close") { dismiss() } } }
         }
         .preferredColorScheme(.dark)
