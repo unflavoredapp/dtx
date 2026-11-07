@@ -121,7 +121,10 @@ struct AppPageView: View {
         }
         .toolbar(.hidden, for: .navigationBar)
         .preferredColorScheme(.dark)
-        .onAppear { if versionID.isEmpty { versionID = app.current?.id ?? "" } }
+        .onAppear {
+            if versionID.isEmpty { versionID = app.current?.id ?? "" }
+            DTXWallet.shared.track(app.bid, "view")
+        }
         .overlay(alignment: .bottom) { if step == .page { bottomBar } }
         .sheet(isPresented: $showTools) {
             NavigationStack {
@@ -222,6 +225,7 @@ struct AppPageView: View {
 
     private func startDownload() {
         guard let u = chosen?.url else { return }
+        DTXWallet.shared.track(app.bid, "download")
         downloader.start(u)
     }
 

@@ -73,6 +73,7 @@ struct AiSidebar: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
                     profileHeader
+                    action("rectangle.grid.2x2.fill", "Hub", detail: "Opened the hub") { open(.hub) }
                     action("circle.grid.3x3.fill", "Browse", detail: "Opened your sources · \(store.repos.count) repo\(store.repos.count == 1 ? "" : "s")") { open(.browse) }
                     action("square.grid.2x2.fill", "Library", detail: "Opened the app library · \(store.apps.count) app\(store.apps.count == 1 ? "" : "s") indexed") { open(.library) }
                     action(UIImage(systemName: "signature") != nil ? "signature" : "pencil.and.scribble", "Signed", detail: "Opened signed builds · \(SignedStore.shared.items.count) build\(SignedStore.shared.items.count == 1 ? "" : "s")") { open(.signed) }
@@ -254,7 +255,8 @@ struct ScreenHost: View {
     }
 
     @ViewBuilder private var page: some View {
-        switch store.screen ?? .tools {
+        switch store.screen ?? .hub {
+        case .hub: HubView()
         case .browse: ReposView()
         case .library: SearchView()
         case .signed: SignedView()

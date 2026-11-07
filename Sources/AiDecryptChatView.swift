@@ -150,19 +150,19 @@ struct AiImageAttachment: Identifiable, Equatable {
 // MARK: - API client
 
 enum AiDecryptAPI {
-    static let endpoint = URL(string: "https://ai.decrypt.team/v1/chat/completions")!
+    static var endpoint: URL { URL(string: Api.shared.base + "/api/dtx/ai/v1/chat/completions")! }
     static let model = "AiDecrypt"
     /// The text model's context window (llama-server -c). Used for the "left" figure in the usage bar.
     static let contextWindow = 32_768
 
     /// A second llama-server instance running a vision-capable model (Qwen2-VL or similar, loaded with
     /// --mmproj), proxied at its own path so the text model's endpoint above doesn't have to change.
-    static let visionEndpoint = URL(string: "https://ai.decrypt.team/v1vision/chat/completions")!
+    static var visionEndpoint: URL { URL(string: Api.shared.base + "/api/dtx/ai/v1vision/chat/completions")! }
     static let visionModel = "AiDecryptVision"
 
     /// A small, separately pinned model for background chores (memory summaries). If that endpoint isn't there the
     /// chore silently runs on the main model instead, and the worker is not tried again this session.
-    static let workerEndpoint = URL(string: "https://ai.decrypt.team/v1worker/chat/completions")!
+    static var workerEndpoint: URL { URL(string: Api.shared.base + "/api/dtx/ai/v1worker/chat/completions")! }
     static let workerModel = "AiDecryptWorker"
     static var workerDown = false
 
@@ -199,6 +199,9 @@ enum AiDecryptAPI {
         var request = URLRequest(url: endpoint, timeoutInterval: 180)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // Same headers as the rest of the app's API calls; the sign-in cookie rides along automatically.
+        request.setValue("1", forHTTPHeaderField: "x-dt")
+        request.setValue(Api.shared.base, forHTTPHeaderField: "Origin")
 
         var body: [String: Any] = [
             "model": model,
@@ -237,6 +240,9 @@ enum AiDecryptAPI {
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+            if code == 401 { throw ApiError.server("Sign in with Telegram to chat. AI messages cost DTX.", code) }
+            if code == 402 { throw ApiError.server("Not enough DTX for this message. Open the Hub to see your balance and scratch today's card.", code) }
+            if code == 429 { throw ApiError.server("Slow down a little and try again.", code) }
             throw ApiError.server("The model server answered with error \(code).", code)
         }
 

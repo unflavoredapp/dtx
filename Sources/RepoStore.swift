@@ -190,6 +190,6 @@ final class RepoStore: ObservableObject {
 
 /// Every page the menu can open, shown full screen.
 enum AppScreen: String, Identifiable {
-    case browse, library, signed, signer, decrypt, certificate, batch, theme, install, tools, settings
+    case hub, browse, library, signed, signer, decrypt, certificate, batch, theme, install, tools, settings
     var id: String { rawValue }
 }
