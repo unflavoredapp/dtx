@@ -1,79 +1,6 @@
 import Foundation
 import ZIPFoundation
 
-// MARK: - A small parallel DAG runner
-
-/// One step of work and the steps that must finish first.
-nonisolated struct DAGNode: Sendable {
-    let id: String
-    let deps: [String]
-    let work: @Sendable () async throws -> Void
-}
-
-nonisolated enum DAGState: Sendable, Equatable {
-    case running, done, failed(String), skipped
-}
-
-nonisolated enum DAGRunner {
-    /// Runs every node as soon as all of its dependencies are done, up to `maxConcurrent` at a time.
-    /// A failed node skips everything that depends on it; unrelated branches keep going.
-    @discardableResult
-    static func run(_ nodes: [DAGNode], maxConcurrent: Int,
-                    progress: @escaping @Sendable (String, DAGState) -> Void) async -> [String: DAGState] {
-        var byID: [String: DAGNode] = [:]
-        var waiting: [String: Set<String>] = [:]
-        var dependents: [String: [String]] = [:]
-        for n in nodes {
-            byID[n.id] = n
-            waiting[n.id] = Set(n.deps)
-            for d in n.deps { dependents[d, default: []].append(n.id) }
-        }
-        var results: [String: DAGState] = [:]
-        var ready: [String] = nodes.filter { $0.deps.isEmpty }.map(\.id)
-        var running = 0
-        let limit = max(1, maxConcurrent)
-
-        await withTaskGroup(of: (String, String?).self) { group in
-            while true {
-                while running < limit, !ready.isEmpty {
-                    let id = ready.removeFirst()
-                    guard let node = byID[id], results[id] == nil else { continue }
-                    running += 1
-                    progress(id, .running)
-                    group.addTask {
-                        do { try await node.work(); return (id, nil) }
-                        catch { return (id, error.localizedDescription) }
-                    }
-                }
-                guard running > 0, let finished = await group.next() else { break }
-                running -= 1
-                let id = finished.0
-                if let message = finished.1 {
-                    results[id] = .failed(message)
-                    progress(id, .failed(message))
-                    // skip everything downstream
-                    var stack = dependents[id] ?? []
-                    while let next = stack.popLast() {
-                        if results[next] == nil {
-                            results[next] = .skipped
-                            progress(next, .skipped)
-                            stack.append(contentsOf: dependents[next] ?? [])
-                        }
-                    }
-                } else {
-                    results[id] = .done
-                    progress(id, .done)
-                    for d in dependents[id] ?? [] {
-                        waiting[d]?.remove(id)
-                        if waiting[d]?.isEmpty == true, results[d] == nil { ready.append(d) }
-                    }
-                }
-            }
-        }
-        return results
-    }
-}
-
 // MARK: - Inject + repackage (no signing)
 
 /// One app moving through the pipeline. Each step touches its own fields and the graph orders the steps,
@@ -148,16 +75,7 @@ nonisolated enum BatchInjector {
         })
 
         // two dylibs with the same file name get distinct names inside the app, so copies never overwrite each other
-        var used = Set<String>()
-        let names: [String] = dylibs.enumerated().map { i, d in
-            var n = d.url.lastPathComponent
-            if !used.insert(n.lowercased()).inserted {
-                let base = d.url.deletingPathExtension().lastPathComponent, ext = d.url.pathExtension
-                n = base + "-\(i)" + (ext.isEmpty ? "" : "." + ext)
-                used.insert(n.lowercased())
-            }
-            return n
-        }
+        let names = uniqueDylibNames(dylibs.map { $0.url })
 
         var copyIDs: [String] = []
         for (i, d) in dylibs.enumerated() {

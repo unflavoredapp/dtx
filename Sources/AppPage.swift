@@ -96,6 +96,7 @@ struct AppPageView: View {
     @State private var version = ""
     @State private var injected: [Injected] = []
     @State private var iconPNG: Data?
+    @State private var thin = false
     @State private var showTools = false
 
     struct Injected: Identifiable { let id = UUID(); let url: URL; var weak = false }
@@ -111,10 +112,10 @@ struct AppPageView: View {
                 case .page: AppHeroPage(app: app, chosen: chosen, versionID: $versionID, downloader: downloader, showTools: { showTools = true })
                 case .options:
                     SignOptionsPage(app: app, downloader: downloader, opts: $opts, name: $name, bundle: $bundle,
-                                    version: $version, injected: $injected, iconPNG: $iconPNG, onSign: { step = .run })
+                                    version: $version, injected: $injected, iconPNG: $iconPNG, thin: $thin, onSign: { step = .run })
                 case .run:
                     SignRunPage(app: app, downloader: downloader, opts: opts, name: name, bundle: bundle, version: version,
-                                injected: injected, iconPNG: iconPNG)
+                                injected: injected, iconPNG: iconPNG, thin: thin)
                 }
             }
         }
@@ -428,9 +429,13 @@ private struct SignOptionsPage: View {
     @Binding var version: String
     @Binding var injected: [AppPageView.Injected]
     @Binding var iconPNG: Data?
+    @Binding var thin: Bool
     let onSign: () -> Void
 
     @ObservedObject private var certs = CertificateStore.shared
+    @ObservedObject private var presets = SignPresetStore.shared
+    @State private var showPresetName = false
+    @State private var presetName = ""
     @State private var open: Set<String> = ["General"]
     @State private var photo: PhotosPickerItem?
     @State private var showCert = false
@@ -473,7 +478,8 @@ private struct SignOptionsPage: View {
                 iconCard
                 title("APP NAME · BUNDLE ID · VERSION")
                 fieldsCard
-                title("BUILD OPTIONS")
+                HStack { title("BUILD OPTIONS"); Spacer(); presetsMenu }
+                thinCard
                 group("General", "slider.horizontal.3", general)
                 group("Strip Content", "scissors", strip)
                 group("Entitlement Scrubbers", "key.fill", scrubbers)
@@ -487,6 +493,14 @@ private struct SignOptionsPage: View {
         .scrollIndicators(.hidden)
         .overlay(alignment: .bottom) { signButton }
         .sheet(isPresented: $showCert) { CertificateView() }
+        .alert("Save preset", isPresented: $showPresetName) {
+            TextField("Name", text: $presetName)
+            Button("Save") {
+                let n = presetName.trimmingCharacters(in: .whitespaces)
+                if !n.isEmpty { presets.save(name: n, from: opts, thin: thin) }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
         .filePicker(isPresented: $importing, types: [.data], multiple: true) { urls in
             for u in urls { injected.append(.init(url: u)) }
         }
@@ -496,6 +510,31 @@ private struct SignOptionsPage: View {
                 if let d = try? await item.loadTransferable(type: Data.self), let ui = UIImage(data: d) { iconPNG = ui.pngData() }
             }
         }
+    }
+
+    private var presetsMenu: some View {
+        Menu {
+            Button { presetName = ""; showPresetName = true } label: { Label("Save these options as a preset…", systemImage: "plus") }
+            ForEach(presets.items) { p in
+                Button(p.name) { presets.apply(p, to: &opts); thin = p.thin }
+            }
+            if !presets.items.isEmpty {
+                Menu("Delete a preset") { ForEach(presets.items) { p in Button(p.name, role: .destructive) { presets.delete(p) } } }
+            }
+        } label: {
+            Label("Presets", systemImage: "slider.horizontal.below.rectangle").font(.system(size: 13, weight: .bold)).foregroundStyle(Color.dtAccent)
+        }
+    }
+
+    private var thinCard: some View {
+        Toggle(isOn: $thin) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Thin to arm64 only").font(.system(size: 17, weight: .semibold))
+                Text("Drops other architectures: about 30% smaller, A8+ devices").font(.system(size: 13)).foregroundStyle(.secondary)
+            }
+        }
+        .tint(Color.dtAccent).padding(14)
+        .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color.white.opacity(0.06)))
     }
 
     private func title(_ t: String) -> some View {
@@ -752,6 +791,7 @@ private struct SignRunPage: View {
     let version: String
     let injected: [AppPageView.Injected]
     let iconPNG: Data?
+    let thin: Bool
 
     struct Step: Identifiable {
         let id = UUID()
@@ -761,13 +801,22 @@ private struct SignRunPage: View {
         var ms: Int?
     }
 
-    @State private var steps: [Step] = [
-        Step(title: "Download IPA", icon: "arrow.down.circle"),
-        Step(title: "Read app bundle", icon: "doc.text.magnifyingglass"),
-        Step(title: "Sign app bundle", icon: "signature"),
-        Step(title: "Package signed IPA", icon: "shippingbox"),
-        Step(title: "Ready to install", icon: "checkmark.circle"),
-    ]
+    @State private var steps: [Step]
+
+    init(app: AppEntry, downloader: IPADownloader, opts: SignOptions, name: String, bundle: String, version: String,
+         injected: [AppPageView.Injected], iconPNG: Data?, thin: Bool) {
+        self.app = app; self.downloader = downloader; self.opts = opts; self.name = name; self.bundle = bundle
+        self.version = version; self.injected = injected; self.iconPNG = iconPNG; self.thin = thin
+        var s = [
+            Step(title: "Download IPA", icon: "arrow.down.circle"),
+            Step(title: "Read app bundle", icon: "doc.text.magnifyingglass"),
+        ]
+        if thin { s.append(Step(title: "Thin to arm64", icon: "scissors")) }
+        s += [Step(title: "Sign app bundle", icon: "signature"),
+              Step(title: "Package signed IPA", icon: "shippingbox"),
+              Step(title: "Ready to install", icon: "checkmark.circle")]
+        _steps = State(initialValue: s)
+    }
     @State private var log: [String] = []
     @State private var showLog = false
     @State private var result: SignedBuild?
@@ -849,20 +898,31 @@ private struct SignRunPage: View {
         if let t { steps[i].ms = Int(Date().timeIntervalSince(t) * 1000) }
     }
 
+    private func at(_ title: String) -> Int { steps.firstIndex { $0.title == title } ?? 0 }
+
     private func run() async {
-        var i = 0
+        var cur = 0
         var t = Date()
         do {
-            mark(0, 1)
-            let ipa = try await downloader.finished()
-            mark(0, 2, since: t)
+            cur = at("Download IPA"); mark(cur, 1)
+            var ipa = try await downloader.finished()
+            mark(cur, 2, since: t)
 
-            i = 1; t = Date(); mark(1, 1)
+            cur = at("Read app bundle"); t = Date(); mark(cur, 1)
             let meta = try? IPAMeta.read(ipa)
             let material = try CertificateStore.shared.activeMaterial()
-            mark(1, 2, since: t)
+            mark(cur, 2, since: t)
 
-            i = 2; t = Date(); mark(2, 1)
+            if thin {
+                cur = at("Thin to arm64"); t = Date(); mark(cur, 1)
+                let source = ipa
+                let r = try await Task.detached { try IPAThinner.thin(source) }.value
+                ipa = r.url
+                log.append("Thinned to arm64: saved " + ByteCountFormatter.string(fromByteCount: r.savedBytes, countStyle: .file))
+                mark(cur, 2, since: t)
+            }
+
+            cur = at("Sign app bundle"); t = Date(); mark(cur, 1)
             var o = opts
             o.name = nonEmpty(name, unlessEqual: app.name)
             o.bundleID = nonEmpty(bundle, unlessEqual: app.bid)
@@ -872,17 +932,17 @@ private struct SignRunPage: View {
             let outcome = try await Signer.signDetached(ipaURL: ipa, material: material, options: o, onLog: { line in
                 Task { @MainActor in log.append(line) }
             })
-            mark(2, 2, since: t)
+            mark(cur, 2, since: t)
 
-            i = 3; t = Date(); mark(3, 1)
+            cur = at("Package signed IPA"); t = Date(); mark(cur, 1)
             let entry = try SignedBuildStore.shared.add(outcome: outcome, icon: iconPNG ?? meta?.iconPNG, certName: material.name)
-            mark(3, 2, since: t)
+            mark(cur, 2, since: t)
 
-            i = 4; mark(4, 2)
+            cur = at("Ready to install"); mark(cur, 2)
             result = entry
             ActivityStore.shared.log("Sign", "signed `" + entry.name + "` with " + material.name)
         } catch {
-            mark(i, 3)
+            mark(cur, 3)
             self.error = error.localizedDescription
         }
     }

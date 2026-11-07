@@ -23,7 +23,7 @@ struct ToolsHubView: View {
     }
 
     enum HubSheet: String, Identifiable {
-        case signer, batch, install, certificate, theme, decrypt, inspector
+        case signer, batch, install, certificate, theme, decrypt, inspector, updates, repos
         var id: String { rawValue }
     }
 
@@ -55,7 +55,7 @@ struct ToolsHubView: View {
             Group(title: "Featured", caption: "Most used tools and services.", columns: 3, tools: [
                 Tool(name: "Decrypt Dylib", sub: "Reconstruct a dylib", icon: "chevron.left.forwardslash.chevron.right", chip: .decrypt, exclusive: true, action: .web(site)),
                 Tool(name: "IPA Builder", sub: "Build from source", icon: "hammer.fill", chip: .build, exclusive: true, action: .web(site)),
-                Tool(name: "Certificates", sub: "Free and paid", icon: "checkmark.seal.fill", chip: .manage, action: .web(site)),
+                Tool(name: "Certificates", sub: "Import and pick", icon: "checkmark.seal.fill", chip: .manage, action: .sheet(.certificate)),
             ]),
             Group(title: "Build & Modify", caption: "Inject, patch and rebuild apps.", columns: 2, tools: [
                 Tool(name: "Injector", sub: "Add dylibs and frameworks", icon: "puzzlepiece.extension.fill", chip: .build, action: .sheet(.decrypt)),
@@ -73,14 +73,14 @@ struct ToolsHubView: View {
                 Tool(name: "Strings", sub: "Readable text", icon: "textformat", chip: .analyze, action: .sheet(.inspector)),
             ]),
             Group(title: "Repo & Libraries", caption: "Sources, updates and saved libraries.", columns: 3, tools: [
-                Tool(name: "Repo Studio", sub: "Repos and updates", icon: "server.rack", chip: .build, action: .web(site)),
+                Tool(name: "Repo Studio", sub: "Your sources", icon: "server.rack", chip: .build, action: .sheet(.repos)),
                 Tool(name: "Dylib Studio", sub: "Analyse and build", icon: "cylinder.split.1x2.fill", chip: .analyze, action: .web(site)),
                 Tool(name: "Flow Graph", sub: "Binary functions", icon: "point.3.connected.trianglepath.dotted", chip: .analyze, action: .web(site)),
             ]),
             Group(title: "Services", caption: "Automation and AI.", columns: 2, tools: [
                 Tool(name: "Ai-Decrypt", sub: "Chat runs the tools", icon: "sparkles", chip: .decrypt, action: .chat),
                 Tool(name: "App Requests", sub: "Ask for any app", icon: "plus.app.fill", chip: .decrypt, action: .web(site)),
-                Tool(name: "Updates", sub: "Latest versions", icon: "arrow.triangle.2.circlepath", chip: .decrypt, action: .web(site)),
+                Tool(name: "Updates", sub: "Newer versions of your apps", icon: "arrow.triangle.2.circlepath", chip: .decrypt, action: .sheet(.updates)),
                 Tool(name: "AppAssassin", sub: "Telegram bot", icon: "paperplane.fill", chip: .decrypt, action: .web(site)),
             ]),
             Group(title: "Manage", caption: "Install, sign and customize.", columns: 2, tools: [
@@ -266,6 +266,8 @@ struct ToolsHubView: View {
         case .theme: ThemeScreen()
         case .decrypt: QuickBuildView()
         case .inspector: IPAInspectorView()
+        case .updates: UpdatesView()
+        case .repos: ReposView()
         }
     }
 }

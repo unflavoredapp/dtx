@@ -59,6 +59,9 @@ struct BatchView: View {
     @ObservedObject private var dylibs = BatchDylibStore.shared
     @ObservedObject private var decrypted = SignedStore.shared
     @ObservedObject private var onPhone = SignedBuildStore.shared
+    @ObservedObject private var sets = BatchSetStore.shared
+    @State private var showSetName = false
+    @State private var setName = ""
     @EnvironmentObject var store: RepoStore
 
     /// One app the person built, from either list.
@@ -101,6 +104,7 @@ struct BatchView: View {
                 dylibSection
                 appsSection
                 addMoreSection
+                retrySection
                 optionsSection
                 if let message { Section { Text(message).font(.footnote).foregroundStyle(.orange) } }
             }
@@ -114,6 +118,14 @@ struct BatchView: View {
                     Button(running ? "Working…" : "Inject \(picked.count)") { Task { await runBatch() } }
                         .disabled(running || picked.isEmpty || dylibs.active.isEmpty)
                 }
+            }
+            .alert("Save dylib set", isPresented: $showSetName) {
+                TextField("Name", text: $setName)
+                Button("Save") {
+                    let n = setName.trimmingCharacters(in: .whitespaces)
+                    if !n.isEmpty { sets.saveCurrent(name: n, from: dylibs) }
+                }
+                Button("Cancel", role: .cancel) {}
             }
             .filePicker(isPresented: $importing, multiple: true) { urls in importDylibs(.success(urls)) }
             .filePicker(isPresented: $importingIPA, multiple: true) { urls in importIPAs(.success(urls)) }
@@ -130,7 +142,7 @@ struct BatchView: View {
         Section {
             if dylibs.items.isEmpty {
                 Text("Add the .dylib files to inject.").foregroundStyle(.secondary).font(.footnote)
-            }
+            } else { setsRow }
             ForEach(dylibs.items) { d in dylibRow(d) }
                 .onDelete { idx in
                     let list = dylibs.items
@@ -139,6 +151,18 @@ struct BatchView: View {
             Button { importing = true } label: { Label("Add dylibs", systemImage: "plus.circle.fill").foregroundStyle(Color.dtAccent) }
                 .disabled(running)
         } header: { Text("Dylibs") }
+    }
+
+    /// Saved sets: tap one to switch the list to exactly those dylibs.
+    private var setsRow: some View {
+        Menu {
+            Button { setName = ""; showSetName = true } label: { Label("Save the ticked dylibs as a set…", systemImage: "plus") }
+                .disabled(dylibs.items.allSatisfy { !$0.enabled })
+            ForEach(sets.sets) { s in Button(s.name) { sets.apply(s, to: dylibs) } }
+            if !sets.sets.isEmpty {
+                Menu("Delete a set") { ForEach(sets.sets) { s in Button(s.name, role: .destructive) { sets.delete(s) } } }
+            }
+        } label: { Label(sets.sets.isEmpty ? "Dylib sets" : "Dylib sets (\(sets.sets.count))", systemImage: "square.stack.3d.down.right").foregroundStyle(Color.dtAccent) }
     }
 
     private func dylibRow(_ d: BatchDylib) -> some View {
@@ -212,6 +236,19 @@ struct BatchView: View {
         case .working(let label): Text(label).font(.caption).foregroundStyle(Color.dtAccent)
         case .done: Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
         case .failed: Image(systemName: "xmark.octagon.fill").foregroundStyle(.red)
+        }
+    }
+
+    private var failedIDs: [String] { phases.compactMap { if case .failed = $0.value { return $0.key } else { return nil } } }
+
+    @ViewBuilder private var retrySection: some View {
+        if !running, !failedIDs.isEmpty {
+            Section {
+                Button {
+                    picked = Set(failedIDs)
+                    Task { await runBatch() }
+                } label: { Label("Retry \(failedIDs.count) failed", systemImage: "arrow.clockwise").foregroundStyle(Color.dtAccent) }
+            }
         }
     }
 

@@ -42,6 +42,12 @@ jobs:
             python3 .github/scripts/build_device_native.py
           } 2>&1 | tee logs/01a-native-device.log
 
+      - name: Logic tests (batch graph, dylib names, arm64 thinning)
+        run: |
+          set -o pipefail
+          swiftc Sources/PureLogic.swift Tests/LogicTests/main.swift -o logic-tests 2>&1 | tee logs/00-logic-compile.log
+          ./logic-tests 2>&1 | tee logs/00-logic-tests.log
+
       - name: Install XcodeGen
         run: set -o pipefail; brew install xcodegen 2>&1 | tee logs/01-xcodegen-install.log
 

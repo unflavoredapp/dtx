@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import SwiftUI
 
@@ -52,6 +53,17 @@ final class RepoStore: ObservableObject {
 
     func refresh() async {
         loading = true; message = nil
+        // Show the last list straight away (from disk) while the fresh copy downloads.
+        if apps.isEmpty {
+            let current = repos
+            let cached: [AppEntry] = await Task.detached(priority: .userInitiated) {
+                current.flatMap { r -> [AppEntry] in
+                    guard let f = Self.cachedFile(r.url) else { return [] }
+                    return Self.bundled(f.apps.map { Self.entry($0, repo: r, repoName: f.name ?? r.name) })
+                }.sorted { $0.key < $1.key }
+            }.value
+            if !cached.isEmpty { apps = cached }
+        }
         var all: [AppEntry] = []
         var names: [String: String] = [:]
         var metas: [String: RepoMeta] = [:]
@@ -111,7 +123,21 @@ final class RepoStore: ObservableObject {
         let (data, resp) = try await URLSession.shared.data(for: req)
         if let h = resp as? HTTPURLResponse, !(200..<300).contains(h.statusCode) { throw RepoError.http(h.statusCode) }
         guard data.count < 120_000_000 else { throw RepoError.notARepo }
-        return try JSONDecoder().decode(RepoFile.self, from: data)
+        let file = try JSONDecoder().decode(RepoFile.self, from: data)
+        try? data.write(to: cacheURL(urlString), options: .atomic)      // kept so the next launch can show apps instantly
+        return file
+    }
+
+    nonisolated private static func cacheURL(_ repo: String) -> URL {
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("repo-cache", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let name = SHA256.hash(data: Data(repo.utf8)).map { String(format: "%02x", $0) }.joined()
+        return dir.appendingPathComponent(name + ".json")
+    }
+
+    nonisolated static func cachedFile(_ repo: String) -> RepoFile? {
+        guard let d = try? Data(contentsOf: cacheURL(repo)) else { return nil }
+        return try? JSONDecoder().decode(RepoFile.self, from: d)
     }
 
     nonisolated static func entry(_ a: RepoApp, repo: RepoInfo, repoName: String) -> AppEntry {
