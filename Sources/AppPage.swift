@@ -795,7 +795,7 @@ private struct SignRunPage: View {
                 Image(systemName: s.icon).font(.system(size: 24)).foregroundStyle(.white.opacity(0.8)).frame(width: 40, height: 40)
                 badge(s.state)
             }
-            Text(s.title).font(.system(size: 19)).foregroundStyle(s.state == 0 ? .secondary : .white)
+            Text(s.title).font(.system(size: 19)).foregroundStyle(s.state == 0 ? Color.secondary : Color.white)
             Spacer()
             if let ms = s.ms { Text("\(ms)ms").font(.system(size: 14, design: .monospaced)).foregroundStyle(.secondary) }
         }
