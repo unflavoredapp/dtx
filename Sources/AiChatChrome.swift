@@ -26,29 +26,28 @@ extension AiDecryptViewModel {
 
 // MARK: - Sidebar drawer
 
-/// The slide-in chat list: quick actions, pinned + recent chats, a big "Chat" button and a settings circle.
+/// The slide-in drawer: quick actions, your activity footprint (rendered as chat markdown), a big "Chat" button and a settings circle.
 struct AiSidebar: View {
     @ObservedObject var vm: AiDecryptViewModel
     let onClose: () -> Void
-    let onColorWheel: () -> Void
-    let onGif: () -> Void
 
+    @EnvironmentObject private var session: Session
     @State private var query = ""
     @State private var searching = false
     @State private var showSettings = false
     @State private var showEdits = false
     @State private var showTools = false
+    @State private var showCertificate = false
+    @State private var showBrowse = false
+    @State private var showLibrary = false
+    @State private var showSigned = false
+    @State private var showSigner = false
+    @State private var showDecrypt = false
+    @ObservedObject private var activity = ActivityStore.shared
     @ObservedObject private var live = LiveSync.shared
     @State private var openScreen: LiveScreen?
     @FocusState private var searchFocused: Bool
 
-    private var filtered: [SavedConversation] {
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return vm.conversations }
-        return vm.conversations.filter { $0.title.lowercased().contains(q) }
-    }
-    private var pinned: [SavedConversation] { filtered.filter { $0.pinned == true } }
-    private var recents: [SavedConversation] { filtered.filter { $0.pinned != true } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -56,7 +55,7 @@ struct AiSidebar: View {
                 if searching {
                     HStack(spacing: 8) {
                         Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                        TextField("Search chats", text: $query)
+                        TextField("Search activity", text: $query)
                             .focused($searchFocused)
                             .autocorrectionDisabled()
                             .textInputAutocapitalization(.never)
@@ -80,25 +79,30 @@ struct AiSidebar: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
-                    action("square.and.pencil", "New chat") { vm.newChat(); onClose() }
+                    profileHeader
+                    action("circle.grid.3x3.fill", "Browse") { onClose(); showBrowse = true }
+                    action("square.grid.2x2.fill", "Library") { onClose(); showLibrary = true }
+                    action(UIImage(systemName: "signature") != nil ? "signature" : "pencil.and.scribble", "Signed") { onClose(); showSigned = true }
+                    action("pencil.tip.crop.circle", "Signer") { onClose(); showSigner = true }
+                    action("lock.open", "Decrypt") { onClose(); showDecrypt = true }
+                    action("checkmark.seal", "Certificate") { onClose(); showCertificate = true }
                     action("wrench.and.screwdriver", "Tools") { onClose(); showTools = true }
-                    action("paintpalette", "Colour wheel") { onColorWheel() }
-                    action("face.smiling", "GIFs") { onGif() }
                     if vm.latestReconProject != nil { action("plus.forwardslash.minus", "Code edits") { showEdits = true } }
                     ForEach((live.config.screens ?? []).filter { ($0.show ?? ["sidebar"]).contains("sidebar") }) { s in
                         action(s.icon ?? "square.grid.2x2", s.title) { openScreen = s }
                     }
 
-                    if !pinned.isEmpty {
-                        header("Pinned")
-                        ForEach(pinned) { row($0) }
+                    HStack {
+                        header("Activity")
+                        Spacer()
+                        if !activity.entries.isEmpty {
+                            Button("Clear") { activity.clear() }
+                                .font(.system(size: 15)).foregroundStyle(.secondary).padding(.trailing, 12).padding(.top, 14)
+                        }
                     }
-                    header("Recents")
-                    if recents.isEmpty && pinned.isEmpty {
-                        Text(query.isEmpty ? "No saved chats yet." : "No chats match.")
-                            .font(.subheadline).foregroundStyle(.secondary).padding(.horizontal, 18).padding(.vertical, 8)
-                    }
-                    ForEach(recents) { row($0) }
+                    MarkdownView(activity.markdown(matching: query))
+                        .padding(.horizontal, 12).padding(.bottom, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     Color.clear.frame(height: 90)
                 }
                 .padding(.horizontal, 8)
@@ -129,8 +133,51 @@ struct AiSidebar: View {
             if let proj = vm.latestReconProject { AiEditHistorySheet(jobID: proj.jobID, name: proj.name) }
         }
         .sheet(isPresented: $showTools) { ToolsHubView() }
+        .sheet(isPresented: $showCertificate) { CertificateView() }
+        .sheet(isPresented: $showBrowse) { ReposView() }
+        .sheet(isPresented: $showLibrary) { SearchView() }
+        .sheet(isPresented: $showSigned) { SignedView() }
+        .sheet(isPresented: $showSigner) { SignerView() }
+        .sheet(isPresented: $showDecrypt) { QuickBuildView() }
         .fullScreenCover(isPresented: $showSettings) {
             AiSettingsView(vm: vm)
+        }
+    }
+
+    /// Telegram photo + username at the top of the list; "Guest" when nobody is signed in.
+    private var profileHeader: some View {
+        HStack(spacing: 14) {
+            profileAvatar
+            VStack(alignment: .leading, spacing: 2) {
+                Text(session.username ?? "Guest")
+                    .font(.system(size: 19, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
+                if session.signedIn {
+                    Text(session.role.capitalized).font(.system(size: 13)).foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12).padding(.top, 4).padding(.bottom, 10)
+    }
+
+    @ViewBuilder private var profileAvatar: some View {
+        let fallback = Circle().fill(Color.dtAccent.opacity(0.32))
+            .overlay(
+                Group {
+                    if let u = session.username, let c = u.first {
+                        Text(String(c).uppercased()).font(.system(size: 20, weight: .semibold)).foregroundStyle(.white.opacity(0.92))
+                    } else {
+                        Image(systemName: "person.fill").font(.system(size: 20)).foregroundStyle(.white.opacity(0.8))
+                    }
+                }
+            )
+        if session.signedIn, let url = session.photoURL {
+            AsyncImage(url: url) { phase in
+                if let img = phase.image { img.resizable().scaledToFill() } else { fallback }
+            }
+            .frame(width: 46, height: 46).clipShape(Circle())
+        } else {
+            fallback.frame(width: 46, height: 46)
         }
     }
 
@@ -140,7 +187,7 @@ struct AiSidebar: View {
     }
 
     private func action(_ icon: String, _ title: String, _ run: @escaping () -> Void) -> some View {
-        Button(action: run) {
+        Button { ActivityStore.shared.log(title); run() } label: {
             HStack(spacing: 16) {
                 Image(systemName: icon).font(.system(size: 20, weight: .regular)).frame(width: 28)
                 Text(title).font(.system(size: 19))
@@ -151,24 +198,5 @@ struct AiSidebar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-    }
-
-    private func row(_ c: SavedConversation) -> some View {
-        Button { vm.open(c.id); onClose() } label: {
-            HStack(spacing: 8) {
-                Text(c.title).font(.system(size: 18)).lineLimit(1).foregroundStyle(.white)
-                Spacer(minLength: 0)
-                if c.pinned == true { Image(systemName: "pin.fill").font(.system(size: 11)).foregroundStyle(.secondary) }
-            }
-            .padding(.horizontal, 12).padding(.vertical, 13)
-            .background(RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(c.id == vm.currentID ? Color.white.opacity(0.09) : Color.clear))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
-            Button { vm.togglePin(c.id) } label: { Label(c.pinned == true ? "Unpin" : "Pin", systemImage: c.pinned == true ? "pin.slash" : "pin") }
-            Button(role: .destructive) { vm.delete(c.id) } label: { Label("Delete", systemImage: "trash") }
-        }
     }
 }

@@ -1322,9 +1322,7 @@ struct AiDecryptChatView: View {
                 AppBackground().ignoresSafeArea()
                 AiSidebar(
                     vm: viewModel,
-                    onClose: { setSidebar(false) },
-                    onColorWheel: { setSidebar(false); viewModel.showColorWheel() },
-                    onGif: { setSidebar(false); DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { showGifPicker = true } }
+                    onClose: { setSidebar(false) }
                 )
                 .frame(width: sw)
 
