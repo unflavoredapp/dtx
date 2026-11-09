@@ -237,12 +237,23 @@ enum AiDecryptAPI {
         if let tools, !tools.isEmpty { body["tools"] = tools; body["tool_choice"] = "auto" }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        var (bytes, response) = try await URLSession.shared.bytes(for: request)
+        // 429 can mean "two replies already running" (a background helper call can overlap the chat reply): wait a moment and retry,
+        // and show the server's own wording so a real rate limit is not confused with an overlap.
+        var serverMsg = ""
+        for attempt in 0..<3 {
+            guard let h = response as? HTTPURLResponse, h.statusCode == 429 else { break }
+            var raw = Data(); for try await b in bytes { raw.append(b); if raw.count > 2048 { break } }
+            serverMsg = ((try? JSONSerialization.jsonObject(with: raw)) as? [String: Any])?["error"] as? String ?? ""
+            guard attempt < 2, serverMsg.contains("already running") else { break }
+            try await Task.sleep(nanoseconds: 2_000_000_000)
+            (bytes, response) = try await URLSession.shared.bytes(for: request)
+        }
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             let code = (response as? HTTPURLResponse)?.statusCode ?? -1
             if code == 401 { throw ApiError.server("Sign in with Telegram to chat. AI messages cost DTX.", code) }
             if code == 402 { throw ApiError.server("Not enough DTX for this message. Open the Hub to see your balance and scratch today's card.", code) }
-            if code == 429 { throw ApiError.server("Slow down a little and try again.", code) }
+            if code == 429 { throw ApiError.server(serverMsg.isEmpty ? "Slow down a little and try again." : serverMsg, code) }
             throw ApiError.server("The model server answered with error \(code).", code)
         }
 
@@ -361,6 +372,8 @@ final class AiDecryptViewModel: ObservableObject {
     @Published var live = AiLiveStats()
     /// Tokens used in this chat (staff and admin have no cap, so this is only a running total).
     @Published var usage = ReconstructAPI.AIUsage(ctx: AiDecryptAPI.contextWindow)
+    /// DTX spent on AI replies in this chat (from the tokens each reply used).
+    @Published var dtxSpent = 0
     @Published var conversations: [SavedConversation] = []
     private(set) var currentID = UUID()
     private var summary = ""
@@ -628,7 +641,13 @@ final class AiDecryptViewModel: ObservableObject {
         let exact = runCalls > 0 && runAPICalls == runCalls
         let tok = exact ? runAPIComp : runCounted
         var parts = [secs < 60 ? "\(secs)s" : "\(secs / 60)m \(secs % 60)s"]
-        if tok > 0 { parts.append("\(exact ? "" : "≈ ")\(tok) tokens") }
+        let spentTokens = exact ? (runAPIPrompt + runAPIComp) : (tok + Int((Double(apiMessages(upTo: messages.count).reduce(0) { $0 + $1.content.count }) / 3.3).rounded(.up)))
+        if spentTokens > 0 {
+            let c = DTXWallet.shared.aiCost(tokens: spentTokens)
+            dtxSpent += c
+            parts.append("\(exact ? "" : "≈ ")\(c) DTX")
+            Task { await DTXWallet.shared.refresh() }
+        }
         if tok > 0, let f = runFirstToken {
             let d = Date().timeIntervalSince(f)
             if d > 0.5 { parts.append(String(format: "%.1f tok/s", Double(tok) / d)) }
@@ -789,7 +808,8 @@ final class AiDecryptViewModel: ObservableObject {
     /// transcript on every request — never stored in `messages`, so it doesn't show up in the UI.
     private func apiMessages(upTo index: Int) -> [AiChatMessage] {
         var out: [AiChatMessage] = []
-        out.append(AiChatMessage(role: .system, content: AiKnowledge.systemPrompt(voice: voice)))
+        out.append(AiChatMessage(role: .system, content: AiKnowledge.systemPrompt(voice: voice) + "\n\n" + DTXWallet.shared.promptText))
+        if DTXWallet.shared.hub == nil { Task { await DTXWallet.shared.refresh() } }
         if heated {
             out.append(AiChatMessage(role: .system, content: "The person is heated. Go hard: be aggressive, don't back down, apologize or calm them down. Tear apart what they said with real logic (point out the flaw, quote them back at them, win the argument), mimic how they talk, and call the send_gif tool with a mocking reaction (like \"cry about it\" or \"skill issue\"). Still fix or answer whatever they actually asked for. Attack their argument and attitude, never protected traits. If they sound genuinely distressed or unsafe rather than just mad, drop the act."))
         }
@@ -1303,6 +1323,7 @@ struct AiDecryptChatView: View {
     @Environment(\.scenePhase) private var scenePhase
     @FocusState private var inputFocused: Bool
     @ObservedObject private var liveSync = LiveSync.shared
+    @ObservedObject private var dtxWallet = DTXWallet.shared
     @State private var showWebpageAlert = false
     @State private var dylibToolsURL = ""
     @State private var dylibToolsName = ""
@@ -1608,7 +1629,7 @@ struct AiDecryptChatView: View {
                 }
                 // one bar: a slim usage strip on top, a grey divider, then the composer
                 VStack(spacing: 0) {
-                    AIUsageBar(usage: shownUsage, compact: true)
+                    AIUsageBar(usage: shownUsage, compact: true, dtxSpent: viewModel.dtxSpent + (viewModel.isStreaming ? DTXWallet.shared.aiCost(tokens: viewModel.live.tokens) : 0), dtxBalance: DTXWallet.shared.hub?.signedIn == true ? DTXWallet.shared.balance : nil, unmetered: DTXWallet.shared.hub?.unmetered == true)
                     Rectangle().fill(Color.white.opacity(0.14)).frame(height: 0.5)
                     composer
                         .sheet(isPresented: $showGifPicker) { AiGifPickerSheet { viewModel.sendGif($0) } }
@@ -1779,7 +1800,7 @@ private struct AiLiveStrip: View {
             AIShimmerLine()
             if live.tokens > 0 {
                 HStack(spacing: 12) {
-                    Label("\(live.tokens) tokens", systemImage: "number")
+                    Label("≈ \(DTXWallet.shared.aiCost(tokens: live.tokens)) DTX", systemImage: "bitcoinsign.circle")
                     if live.tps > 0 { Label(String(format: "%.1f tok/s", live.tps), systemImage: "bolt.fill") }
                 }
                 .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
