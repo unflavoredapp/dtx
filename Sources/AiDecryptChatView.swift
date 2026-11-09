@@ -965,6 +965,7 @@ final class AiDecryptViewModel: ObservableObject {
                 if AiLiveRelease.available { tools.append(AiLiveRelease.schema); tools.append(AiRecipeTool.schema) }
                 if AiDylibTool.available { tools.append(AiDylibTool.schema) }
                 tools.append(AiCrashTool.schema)
+                tools.append(AiDecrawlTool.schema)
                 if AiDylibTool.available { tools.append(AiDylibPlanTool.schema) }
                 if latestReconProject != nil { tools.append(AiCodeEdit.schema) }
                 if binaryAttachment != nil { tools += AiToolBridge.toolSchemas() }
@@ -1081,6 +1082,9 @@ final class AiDecryptViewModel: ObservableObject {
                     } else if call.name == "list_tools" {
                         let dylibOnly = AiToolBridge.listToolsDylibOnly(call.arguments)
                         let result = await AiToolBridge.listTools(dylibOnly: dylibOnly)
+                        messages.append(AiChatMessage(role: .tool, content: result, toolCallId: call.id, name: call.name))
+                    } else if call.name == AiDecrawlTool.name {
+                        let result = await AiDecrawlTool.run(AiDecrawlTool.query(call.arguments))
                         messages.append(AiChatMessage(role: .tool, content: result, toolCallId: call.id, name: call.name))
                     } else if call.name == "run_tool" {
                         let a = AiToolBridge.runToolArgs(call.arguments)

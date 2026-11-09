@@ -44,6 +44,7 @@ module.exports = function mountAiEdit(ctx) {
   const { app, express, B, guard, findPart, outRoot, audit, saveFile } = ctx;
   const pmem = require('./project-memory');
   const symbols = require('./symbols');
+  const decrawl = require('../decrawl');
   const { spawn } = require('child_process');
   const env = ctx.env || process.env;
 
@@ -314,7 +315,7 @@ module.exports = function mountAiEdit(ctx) {
   // `elevated` (admin or staff — see isElevated() below) skips every per-section truncation; the overall `cap`
   // still applies even then, as a sane ceiling against a pathological single project blowing past what the model
   // can actually hold, not as a limit anyone is meant to hit in practice.
-  function gather(part, b, sections, elevated) {
+  function gather(part, b, sections, elevated, crawl) {
     const dir = dirOf(part), cap = elevated ? Number(env.OPTIMIZE_CTX_CHARS_STAFF || 400000) : Number(env.OPTIMIZE_CTX_CHARS || 48000); let used = 0; const out = [];
     const add = (title, body, lim) => { if (!body) return; let s = String(body); if (!elevated && s.length > lim) s = s.slice(0, lim) + '\n…(truncated)'; if (used + s.length > cap) s = s.slice(0, Math.max(0, cap - used)); if (!s) return; used += s.length; out.push(`=== ${title} ===\n${s}`); if (sections) sections.push(title); };
     const file = b.file ? resolve(part, b.file) : null;
@@ -356,6 +357,8 @@ module.exports = function mountAiEdit(ctx) {
     // budget (a 1000+ line open file easily does on its own) — nice-to-have project awareness, never at the
     // cost of the actual code or diagnostics the request needs.
     const symSdk = ctx.findSdk ? (() => { try { return ctx.findSdk(); } catch { return null; } })() : null;
+    // Real public knowledge from Decrawl (our crawler/search index) about the classes and functions at hand. Reference only.
+    if (crawl) add('Decrawl: what crawled public sources say about these names (reference only; may be unrelated, never copy code or facts that the evidence above contradicts)', crawl, 2500);
     add('Project memory (persists across sessions)', pmem.summary(dir), 1800);
     add('Project symbol index (every class/method/function in this project)', symbols.summaryFor(dir, 2000, { sdk: symSdk }), 2000);
     if (file) add(`Cross-file dependencies of ${file.norm} (textual, not semantic)`, symbols.depsFor(dir, file.norm, { sdk: symSdk }), 1000);
@@ -544,6 +547,18 @@ module.exports = function mountAiEdit(ctx) {
     return testing;
   }
   setTimeout(selfTest, 6000).unref(); setInterval(selfTest, 10 * 60 * 1000).unref();
+  // The app's chat model asks Decrawl through here (signed-in people only, rate limited, no charge).
+  const dcHits = new Map();
+  app.get('/api/decrawl/search', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    if (!req.me) return res.status(401).json({ ok: false, error: 'Log in first.' });
+    const k = String(req.me.id), now = Date.now(), arr = (dcHits.get(k) || []).filter((t) => now - t < 60000);
+    if (arr.length >= 20) return res.status(429).json({ ok: false, error: 'Too many searches. Wait a minute.' });
+    arr.push(now); dcHits.set(k, arr); if (dcHits.size > 5000) dcHits.delete(dcHits.keys().next().value);
+    const r = await decrawl.search(String(req.query.q || ''), { limit: 8 });
+    res.json({ ok: r.ok, results: r.results, facts: r.facts, answer: r.answer, text: decrawl.render(r, 3500) });
+  });
+
   app.get('/api/ai/health', async (req, res) => {
     if (req.query.fresh || !health.at) await selfTest();
     res.json({ at: health.at, main: health.main, workers: health.workers, model: LLM.model(), modelDeep: LLM.modelDeep ? LLM.modelDeep() : null });
@@ -579,7 +594,15 @@ module.exports = function mountAiEdit(ctx) {
       if (!b.file && tri && tri.files[0]) b = Object.assign({}, b, { file: tri.files[0] });
       stepTo(job, 'triage', 'Triage by the helper models', tri ? tri.files.length + ' file(s), ' + tri.causes.length + ' cause(s)' : 'skipped');
     }
-    const sections = [], ctxText0 = gather(part, b, sections, elevated);
+    // Ask Decrawl about the things this request is about: the symbol, the open file's class, the first compiler error, the dylib itself.
+    let crawl = '';
+    try {
+      const f0 = b.file ? String(b.file).split('/').pop().replace(/\.\w+$/, '').replace(/[+_-]/g, ' ') : '';
+      const err0 = (() => { const d = diag.parse(dirOf(part)); for (const arr of Object.values(d.files || {})) { const x = arr.find((y) => y.sev === 'error'); if (x) return x.msg; } return ''; })();
+      stepTo(job, 'context', 'Asking Decrawl');
+      crawl = await decrawl.context([b.symbol, f0 && f0 + ' objective-c ios', err0 && 'ios tweak ' + err0, part.dylibName && part.dylibName.replace(/\.dylib$/i, '') + ' ios dylib'], 3000);
+    } catch { crawl = ''; }
+    const sections = [], ctxText0 = gather(part, b, sections, elevated, crawl);
     const ctxText = tri && (tri.causes.length || tri.files.length)
       ? '=== Triage notes (from a small fast helper model: use as hints and verify against the code) ===\n' + (tri.files.length ? 'Likely files: ' + tri.files.join(', ') + '\n' : '') + tri.causes.map((c) => '- ' + c).join('\n') + '\n\n' + ctxText0
       : ctxText0;
