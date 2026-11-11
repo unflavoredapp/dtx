@@ -476,10 +476,9 @@ private struct SignOptionsPage: View {
                 group("Strip Content", "scissors", strip, thinRow: true)
                 group("Entitlement Scrubbers", "key.fill", scrubbers)
                 plistGroup
+                toolsGroup
                 title("DYLIB INJECTION")
                 injectCard
-                title("TOOLS")
-                ForEach(ToolsHubView.catalog) { g in toolGroup(g) }
                 Color.clear.frame(height: 92)
             }
             .animation(.easeInOut(duration: 0.3), value: downloader.state)
@@ -612,7 +611,7 @@ private struct SignOptionsPage: View {
 
     private var fieldsCard: some View {
         VStack(spacing: 0) {
-            field("Aa", "Name", $name)
+            field("textformat", "Name", $name)
             Divider().overlay(Color.white.opacity(0.08))
             field("shippingbox.fill", "Bundle ID", $bundle, mono: true)
             Divider().overlay(Color.white.opacity(0.08))
@@ -769,33 +768,31 @@ private struct SignOptionsPage: View {
 
     // MARK: tools
 
-    private static let toolGroupIcons = [
-        "Featured": "star.fill", "Build & Modify": "hammer.fill", "Analyze & Inspect": "magnifyingglass",
-        "Repo & Libraries": "server.rack", "Services": "sparkles", "Manage": "slider.horizontal.3",
-    ]
-
-    /// One group of the Tools hub, as a fold-out list. Each tool opens right here.
-    private func toolGroup(_ g: ToolsHubView.Group) -> some View {
-        let key = "Tools: " + g.title
-        let isOpen = open.contains(key)
+    /// Every tool from the Tools hub in one fold-out. Each tool opens right here.
+    private var toolsGroup: some View {
+        let isOpen = open.contains("Tools")
         return VStack(spacing: 0) {
-            groupHeader(g.title, Self.toolGroupIcons[g.title] ?? "wrench.and.screwdriver.fill", 0, isOpen) { toggle(key) }
+            groupHeader("Tools", "wrench.and.screwdriver.fill", 0, isOpen) { toggle("Tools") }
             if isOpen {
-                ForEach(g.tools) { t in
+                ForEach(ToolsHubView.catalog) { g in
                     Divider().overlay(Color.white.opacity(0.06))
-                    Button { run(t) } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: t.icon).font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.dtAccent).frame(width: 26)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(t.name).font(.system(size: 11, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
-                                Text(t.sub).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                    Text(g.title.uppercased()).font(.system(size: 9, weight: .heavy)).tracking(2).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 4)
+                    ForEach(g.tools) { t in
+                        Button { run(t) } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: t.icon).font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.dtAccent).frame(width: 26)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(t.name).font(.system(size: 11, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
+                                    Text(t.sub).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                                Spacer(minLength: 0)
+                                Image(systemName: isWeb(t) ? "arrow.up.right" : "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
                             }
-                            Spacer(minLength: 0)
-                            Image(systemName: isWeb(t) ? "arrow.up.right" : "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+                            .padding(.horizontal, 14).padding(.vertical, 7).contentShape(Rectangle())
                         }
-                        .padding(.horizontal, 14).padding(.vertical, 8).contentShape(Rectangle())
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
             }
         }
@@ -867,84 +864,110 @@ private struct SignRunPage: View {
         _steps = State(initialValue: s)
     }
     @State private var log: [String] = []
-    @State private var showLog = false
     @State private var result: SignedBuild?
     @State private var error: String?
     @State private var started = false
+    @ObservedObject private var installer = NativeInstaller.shared
+    @State private var showSetup = false
+    @State private var installError: String?
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 3) {
-                ForEach(steps) { s in row(s) }
-                if let error { Text(error).font(.system(size: 9)).foregroundStyle(.red).padding(.top, 7) }
-                if let r = result { resultCard(r) }
-                if !log.isEmpty { logCard }
-                Color.clear.frame(height: 34)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("SIGNER LOG").font(.system(size: 9, weight: .heavy)).tracking(4).foregroundStyle(.secondary)
+                    Text(log.joined(separator: "\n")).font(.system(size: 10, design: .monospaced)).foregroundStyle(.white.opacity(0.85))
+                        .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                    if result == nil && error == nil { ProgressView().scaleEffect(0.7) }
+                    if let error { Text(error).font(.system(size: 11)).foregroundStyle(.red) }
+                    Color.clear.frame(height: 96).id("end")
+                }
+                .padding(.horizontal, 15).padding(.top, 7)
             }
-            .padding(.horizontal, 15).padding(.top, 7)
+            .scrollIndicators(.hidden)
+            .onChange(of: log.count) { _ in proxy.scrollTo("end", anchor: .bottom) }     // follows the log as it grows
         }
-        .scrollIndicators(.hidden)
+        .overlay(alignment: .bottom) { bottomBar }
         .task { if !started { started = true; await run() } }
+        .sheet(isPresented: $showSetup) { DeviceSetupView() }
+        .alert("Couldn't install", isPresented: Binding(get: { installError != nil }, set: { if !$0 { installError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(installError ?? "") }
     }
 
-    private func row(_ s: Step) -> some View {
-        HStack(spacing: 12) {
-            ZStack(alignment: .bottomTrailing) {
-                Image(systemName: s.icon).font(.system(size: 16)).foregroundStyle(.white.opacity(0.8)).frame(width: 34, height: 34)
-                badge(s.state)
-            }
-            Text(s.title).font(.system(size: 13)).foregroundStyle(s.state == 0 ? Color.secondary : Color.white)
-            Spacer()
-            if let ms = s.ms { Text("\(ms)ms").font(.system(size: 9, design: .monospaced)).foregroundStyle(.secondary) }
-        }
-        .padding(.vertical, 7)
-    }
+    // MARK: bottom bar: Download, the app and credit, Install
 
-    @ViewBuilder private func badge(_ state: Int) -> some View {
-        switch state {
-        case 1: ProgressView().scaleEffect(0.6).frame(width: 15, height: 15)
-        case 2: Image(systemName: "checkmark.circle.fill").font(.system(size: 12)).foregroundStyle(.green).background(Circle().fill(.black))
-        case 3: Image(systemName: "xmark.circle.fill").font(.system(size: 12)).foregroundStyle(.red).background(Circle().fill(.black))
-        default: EmptyView()
-        }
-    }
+    private var installing: Bool { installer.isActive && installer.job?.bundleID == result?.bundleID }
 
-    private func resultCard(_ r: SignedBuild) -> some View {
-        VStack(spacing: 12) {
-            Text(r.name).font(.system(size: 15, weight: .bold))
-            Text("v" + r.version + " · " + r.sizeString + " · " + r.certName).font(.system(size: 9)).foregroundStyle(.secondary)
-            HStack(spacing: 10) {
-                InstallSignedButton(build: r)
-                ShareLink(item: r.ipaURL) {
-                    Label("Share", systemImage: "square.and.arrow.up").font(.system(size: 11, weight: .semibold))
-                        .padding(.horizontal, 14).padding(.vertical, 8).background(Capsule().fill(Color.white.opacity(0.1)))
+    private var bottomBar: some View {
+        HStack(spacing: 6) {
+            Group {
+                if let r = result {
+                    ShareLink(item: r.ipaURL) { barLabel("arrow.down.circle", "Download") }
+                } else {
+                    barLabel("arrow.down.circle", "Download").opacity(0.35)
                 }
             }
-        }
-        .frame(maxWidth: .infinity).padding(15)
-        .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Color.white.opacity(0.07)))
-        .padding(.top, 12)
-    }
-
-    private var logCard: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Button { withAnimation { showLog.toggle() } } label: {
-                HStack { Text("Signer log").font(.system(size: 10, weight: .semibold)); Spacer(); Image(systemName: showLog ? "chevron.up" : "chevron.down") }
-                    .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            VStack(spacing: 3) {
+                Group {
+                    if let d = iconPNG, let ui = UIImage(data: d) { Image(uiImage: ui).resizable().scaledToFill() }
+                    else { AppIconView(url: app.icon, name: app.name, size: 26) }
+                }
+                .frame(width: 26, height: 26).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                Text("Made by ᴍƦᴢᴇꜰΛ").font(.system(size: 11, weight: .heavy)).foregroundStyle(Color(red: 0.94, green: 0.52, blue: 0.17))
+                Text("Powered by Decrypt.Team").font(.system(size: 9, weight: .semibold)).foregroundStyle(Color(red: 1.0, green: 0.30, blue: 0.30))
+            }
+            .lineLimit(1).minimumScaleFactor(0.6).layoutPriority(1)
+            Spacer(minLength: 0)
+            Button { install() } label: {
+                if installing { ProgressView().frame(minWidth: 54, minHeight: 44) }
+                else { barLabel("antenna.radiowaves.left.and.right", "Install") }
             }
             .buttonStyle(.plain)
-            if showLog {
-                Text(log.joined(separator: "\n")).font(.system(size: 9, design: .monospaced)).foregroundStyle(.secondary).textSelection(.enabled)
-            }
+            .disabled(result == nil || installer.isActive)
+            .opacity(result == nil ? 0.35 : 1)
         }
-        .padding(.top, 12)
+        .padding(.horizontal, 14).padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 26, style: .continuous).fill(Color(white: 0.11)))
+        .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(Color.white.opacity(0.09), lineWidth: 1))
+        .padding(.horizontal, 12).padding(.bottom, 5)
+    }
+
+    private func barLabel(_ icon: String, _ text: String) -> some View {
+        VStack(spacing: 3) {
+            Image(systemName: icon).font(.system(size: 18, weight: .medium))
+            Text(text).font(.system(size: 11, weight: .bold))
+        }
+        .foregroundStyle(Color.dtAccent).frame(minWidth: 54, minHeight: 44)
+    }
+
+    /// Same as InstallSignedButton: opens the setup screen first when native install isn't set up yet.
+    private func install() {
+        guard let build = result else { return }
+        guard NativeInstaller.isSelected else { showSetup = true; return }
+        Task {
+            do {
+                try await NativeInstaller.shared.install(build)
+                ActivityStore.shared.log("Install", "installed `" + build.name + "` on this device")
+            } catch is CancellationError {
+            } catch { installError = error.localizedDescription }
+        }
     }
 
     // MARK: work
 
+    /// Each step writes its own line to the log as it starts, finishes or fails.
     private func mark(_ i: Int, _ state: Int, since t: Date? = nil) {
         steps[i].state = state
         if let t { steps[i].ms = Int(Date().timeIntervalSince(t) * 1000) }
+        let name = steps[i].title
+        switch state {
+        case 1: log.append("▸ " + name + "…")
+        case 2: log.append("✓ " + name + (steps[i].ms.map { " · \($0)ms" } ?? ""))
+        case 3: log.append("✗ " + name + " failed")
+        default: break
+        }
     }
 
     private func at(_ title: String) -> Int { steps.firstIndex { $0.title == title } ?? 0 }
@@ -988,6 +1011,7 @@ private struct SignRunPage: View {
             mark(cur, 2, since: t)
 
             cur = at("Ready to install"); mark(cur, 2)
+            log.append(entry.name + " · v" + entry.version + " · " + entry.sizeString + " · " + entry.certName)
             result = entry
             ActivityStore.shared.log("Sign", "signed `" + entry.name + "` with " + material.name)
         } catch {
