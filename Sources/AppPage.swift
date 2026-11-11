@@ -97,6 +97,8 @@ struct AppPageView: View {
     @State private var injected: [Injected] = []
     @State private var iconPNG: Data?
     @State private var thin = false
+    /// false = sign on this phone, true = sign on the Decrypt.Team server
+    @AppStorage("dt.sign.remote") private var remote = false
 
     struct Injected: Identifiable { let id = UUID(); let url: URL; var weak = false }
 
@@ -111,10 +113,10 @@ struct AppPageView: View {
                 case .page: AppHeroPage(app: app, chosen: chosen, versionID: $versionID, downloader: downloader)
                 case .options:
                     SignOptionsPage(app: app, downloader: downloader, opts: $opts, name: $name, bundle: $bundle,
-                                    version: $version, injected: $injected, iconPNG: $iconPNG, thin: $thin, onChat: { store.pickedApp = nil; store.screen = nil; dismiss() }, onSign: { step = .run })
+                                    version: $version, injected: $injected, iconPNG: $iconPNG, thin: $thin, remote: $remote, onChat: { store.pickedApp = nil; store.screen = nil; dismiss() }, onSign: { step = .run })
                 case .run:
                     SignRunPage(app: app, downloader: downloader, opts: opts, name: name, bundle: bundle, version: version,
-                                injected: injected, iconPNG: iconPNG, thin: thin)
+                                injected: injected, iconPNG: iconPNG, thin: thin, remote: remote, ipaLink: chosen?.url)
                 }
             }
         }
@@ -427,6 +429,7 @@ private struct SignOptionsPage: View {
     @Binding var injected: [AppPageView.Injected]
     @Binding var iconPNG: Data?
     @Binding var thin: Bool
+    @Binding var remote: Bool
     /// Leaves this page for the chat (the Ai-Decrypt tool).
     let onChat: () -> Void
     let onSign: () -> Void
@@ -475,6 +478,7 @@ private struct SignOptionsPage: View {
                 if downloader.state != .done { downloadCard.transition(.opacity.combined(with: .move(edge: .top))) }
                 title("SIGNING METHOD")
                 certCard
+                whereCard
                 title("APP ICON")
                 iconCard
                 title("APP NAME · BUNDLE ID · VERSION")
@@ -586,6 +590,24 @@ private struct SignOptionsPage: View {
             .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Color.dtAccent.opacity(0.6), lineWidth: 1.5))
         }
         .buttonStyle(.plain)
+    }
+
+    /// On this phone, or on our server (pinned workers, installs over the air from decrypt.team).
+    private var whereCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            segRow("Sign on", ["This device", "Decrypt.Team"], remote ? 1 : 0) { remote = $0 == 1 }
+            Text(whereNote).font(.system(size: 9)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14).background(RoundedRectangle(cornerRadius: 19, style: .continuous).fill(Color.white.opacity(0.06)))
+    }
+
+    private var whereNote: String {
+        guard remote else { return "Signed on this phone. Your certificate never leaves it." }
+        var note = "A pinned worker on our server signs it and your phone installs it over the air from decrypt.team. "
+        note += "Your certificate and its password are sent for this one job and deleted when it finishes."
+        if let cost = DTXWallet.shared.hub?.prices?["sign"] { note += " Costs \(cost) DTX." }
+        note += " Thin, dylib injection and Info.plist tweaks are on-device only."
+        return note
     }
 
     private var certDetail: String {
@@ -846,6 +868,9 @@ private struct SignRunPage: View {
     let injected: [AppPageView.Injected]
     let iconPNG: Data?
     let thin: Bool
+    let remote: Bool
+    /// where the server fetches the IPA from
+    let ipaLink: URL?
 
     struct Step: Identifiable {
         let id = UUID()
@@ -858,9 +883,16 @@ private struct SignRunPage: View {
     @State private var steps: [Step]
 
     init(app: AppEntry, downloader: IPADownloader, opts: SignOptions, name: String, bundle: String, version: String,
-         injected: [AppPageView.Injected], iconPNG: Data?, thin: Bool) {
+         injected: [AppPageView.Injected], iconPNG: Data?, thin: Bool, remote: Bool, ipaLink: URL?) {
         self.app = app; self.downloader = downloader; self.opts = opts; self.name = name; self.bundle = bundle
         self.version = version; self.injected = injected; self.iconPNG = iconPNG; self.thin = thin
+        self.remote = remote; self.ipaLink = ipaLink
+        if remote {
+            _steps = State(initialValue: [Step(title: "Send job to Decrypt.Team", icon: "paperplane"),
+                                          Step(title: "Sign on server", icon: "server.rack"),
+                                          Step(title: "Ready to install", icon: "checkmark.circle")])
+            return
+        }
         var s = [
             Step(title: "Download IPA", icon: "arrow.down.circle"),
             Step(title: "Read app bundle", icon: "doc.text.magnifyingglass"),
@@ -872,12 +904,17 @@ private struct SignRunPage: View {
         _steps = State(initialValue: s)
     }
     /// One line of the log: who wrote it (a signing thread, or the app itself), microseconds since signing began, the text.
-    struct LogLine { let thread: Int?; let us: Int; let text: String }
+    /// `worker` marks lines from the server: its pinned workers show as W1, W2… and the server itself as srv.
+    struct LogLine { let thread: Int?; let us: Int; let text: String; var worker = false }
     @State private var log: [LogLine] = []
     @State private var began = Date()
     /// zsign's thread ids, numbered T0, T1… in the order they first speak
     @State private var threads: [String: Int] = [:]
     @State private var result: SignedBuild?
+    /// set instead of `result` when the server signed it
+    @State private var served: RemoteSign.Result?
+    @State private var certUsed = ""
+    @Environment(\.openURL) private var openURL
     @State private var error: String?
     @State private var started = false
     @ObservedObject private var installer = NativeInstaller.shared
@@ -892,15 +929,17 @@ private struct SignRunPage: View {
                     Text("SIGNER LOG").font(.system(size: 9, weight: .heavy)).tracking(4).foregroundStyle(.secondary)
                     Text(styledLog).font(.system(size: 10, design: .monospaced)).foregroundStyle(.white.opacity(0.85))
                         .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
-                    if result == nil && error == nil { ProgressView().scaleEffect(0.7) }
+                    if result == nil && served == nil && error == nil { ProgressView().scaleEffect(0.7) }
                     if let error { Text(error).font(.system(size: 11)).foregroundStyle(.red) }
-                    if let r = result { summary(r) }
+                    if let r = result { summary(name: r.name, bundleID: r.bundleID, version: r.version, cert: r.certName) }
+                    else if let r = served { summary(name: r.name, bundleID: r.bundleId, version: r.version, cert: certUsed) }
                     Color.clear.frame(height: 96).id("end")
                 }
                 .padding(.horizontal, 15).padding(.top, 7)
             }
             .scrollIndicators(.hidden)
             .onChange(of: log.count) { _ in proxy.scrollTo("end", anchor: .bottom) }     // follows the log as it grows
+            .onChange(of: served) { _ in DispatchQueue.main.async { withAnimation { proxy.scrollTo("end", anchor: .bottom) } } }
             .onChange(of: result) { _ in DispatchQueue.main.async { withAnimation { proxy.scrollTo("end", anchor: .bottom) } } }   // brings the summary rows into view
         }
         .overlay(alignment: .bottom) { bottomBar }
@@ -954,7 +993,8 @@ private struct SignRunPage: View {
         for (i, entry) in log.enumerated() {
             let line = entry.text
             let who = entry.thread ?? -1
-            var tag = AttributedString((entry.thread.map { "T\($0)" } ?? "app").padding(toLength: 4, withPad: " ", startingAt: 0))
+            let label = entry.thread.map { (entry.worker ? "W" : "T") + "\($0)" } ?? (entry.worker ? "srv" : "app")
+            var tag = AttributedString(label.padding(toLength: 4, withPad: " ", startingAt: 0))
             tag.foregroundColor = entry.thread.map { Self.threadColors[$0 % Self.threadColors.count] } ?? Color.secondary
             var time = AttributedString(String(format: "%8ldµs ", entry.us))
             time.foregroundColor = Color.secondary
@@ -981,13 +1021,13 @@ private struct SignRunPage: View {
     // MARK: summary rows
 
     /// Plain log-style lines; the certificate line carries a small certificate icon and the days it has left.
-    private func summary(_ r: SignedBuild) -> some View {
+    private func summary(name: String, bundleID: String, version: String, cert: String) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            summaryRow("App name", r.name)
-            summaryRow("Bundle ID", r.bundleID)
-            summaryRow("Version", r.version)
+            summaryRow("App name", name)
+            summaryRow("Bundle ID", bundleID)
+            summaryRow("Version", version)
             summaryRow("Total time", totalTime)
-            summaryRow("Certificate", maskedUDID(r.certName) + (daysLeft.map { " · " + $0 } ?? ""), icon: true)
+            summaryRow("Certificate", maskedUDID(cert) + (daysLeft.map { " · " + $0 } ?? ""), icon: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -1025,6 +1065,8 @@ private struct SignRunPage: View {
             Group {
                 if let r = result {
                     ShareLink(item: r.ipaURL) { barLabel("arrow.down.circle", "Download") }
+                } else if let r = served, let u = URL(string: r.ipa) {
+                    Button { openURL(u) } label: { barLabel("arrow.down.circle", "Download") }.buttonStyle(.plain)
                 } else {
                     barLabel("arrow.down.circle", "Download").opacity(0.35)
                 }
@@ -1043,8 +1085,8 @@ private struct SignRunPage: View {
                 else { barLabel("antenna.radiowaves.left.and.right", "Install") }
             }
             .buttonStyle(.plain)
-            .disabled(result == nil || installer.isActive)
-            .opacity(result == nil ? 0.35 : 1)
+            .disabled((result == nil && served == nil) || installer.isActive)
+            .opacity(result == nil && served == nil ? 0.35 : 1)
         }
         .padding(.horizontal, 14).padding(.vertical, 6)
         .background(RoundedRectangle(cornerRadius: 26, style: .continuous).fill(Color(white: 0.11)))
@@ -1061,7 +1103,12 @@ private struct SignRunPage: View {
     }
 
     /// Same as InstallSignedButton: opens the setup screen first when native install isn't set up yet.
+    /// A server-signed build installs over the air from our domain.
     private func install() {
+        if let r = served {
+            if let u = URL(string: r.install) { openURL(u); ActivityStore.shared.log("Install", "installing `" + r.name + "` over the air") }
+            return
+        }
         guard let build = result else { return }
         guard NativeInstaller.isSelected else { showSetup = true; return }
         Task {
@@ -1090,7 +1137,61 @@ private struct SignRunPage: View {
 
     private func at(_ title: String) -> Int { steps.firstIndex { $0.title == title } ?? 0 }
 
+    /// Server signing: send the job, then follow the server's log until it is done.
+    private func runRemote() async {
+        began = Date()
+        var cur = 0
+        var t = Date()
+        do {
+            cur = at("Send job to Decrypt.Team"); mark(cur, 1)
+            guard let link = ipaLink else { throw SignDownloadError(message: "This app has no download link to send to the server.") }
+            let material = try CertificateStore.shared.activeMaterial()
+            certUsed = material.name
+            if thin || !injected.isEmpty || !opts.plistSet.isEmpty { add("Note: thin, dylib injection and Info.plist tweaks only apply when signing on this device") }
+            let newName = nonEmpty(name, unlessEqual: app.name), newBundle = nonEmpty(bundle, unlessEqual: app.bid)
+            let v = version.trimmingCharacters(in: .whitespaces)
+            var body: [String: Any] = [
+                "ipaUrl": link.absoluteString,
+                "p12": material.p12.base64EncodedString(), "provision": material.provision.base64EncodedString(), "password": material.password,
+                "name": newName ?? app.name, "bundleId": newBundle ?? app.bid, "version": v.isEmpty ? (app.current?.version ?? "1.0") : v,
+                "setName": newName != nil, "setBundleId": newBundle != nil,
+                "setVersion": !v.isEmpty && !app.versions.contains { $0.version == v },
+                "rmExtensions": opts.stripExtensions, "rmWatch": opts.stripWatchApps,
+            ]
+            if let iconPNG { body["icon"] = iconPNG.base64EncodedString() }
+            let job = try await RemoteSign.start(body)
+            // the server counts from the moment it accepted the job; this lines its clock up with ours
+            let offset = Int(Date().timeIntervalSince(began) * 1_000_000)
+            mark(cur, 2, since: t)
+
+            cur = at("Sign on server"); t = Date(); mark(cur, 1)
+            var next = 0
+            while true {
+                try await Task.sleep(nanoseconds: 350_000_000)
+                let s = try await RemoteSign.status(job.id, since: next)
+                for l in s.lines { log.append(LogLine(thread: l.w > 0 ? l.w : nil, us: offset + l.us, text: l.t, worker: true)) }
+                next = s.next
+                if s.state == "failed" { throw SignDownloadError(message: s.error ?? "The server could not sign this app.") }
+                if s.state == "done", let r = s.result {
+                    mark(cur, 2, since: t)
+                    cur = at("Ready to install"); mark(cur, 2)
+                    if let m = r.minutes { add("Install link is good for \(m) minutes") }
+                    totalUs = Int(Date().timeIntervalSince(began) * 1_000_000)
+                    served = r
+                    ActivityStore.shared.log("Sign", "signed `" + r.name + "` on the server with " + maskedUDID(material.name))
+                    DTXWallet.shared.track(app.bid, "download")
+                    Task { await DTXWallet.shared.refresh() }
+                    break
+                }
+            }
+        } catch {
+            mark(cur, 3)
+            self.error = error.localizedDescription
+        }
+    }
+
     private func run() async {
+        if remote { await runRemote(); return }
         began = Date()
         var cur = 0
         var t = Date()
