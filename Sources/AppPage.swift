@@ -192,9 +192,9 @@ struct AppPageView: View {
         HStack(spacing: 6) {
             Button { startDownload() } label: { downloadLabel }.buttonStyle(.plain)
             Spacer(minLength: 0)
-            HStack(spacing: 5) {
-                Text("UNCRYPT").font(.system(size: 9, weight: .heavy)).tracking(1.2).foregroundStyle(Color.dtAccent)
-                Text("Powered by DECRYPT.TEAM").font(.system(size: 9)).foregroundStyle(.secondary)
+            VStack(spacing: 2) {
+                Text("Made by ᴍƦᴢᴇꜰΛ").font(.system(size: 11, weight: .heavy)).foregroundStyle(Color(red: 0.94, green: 0.52, blue: 0.17))
+                Text("Powered by Decrypt.Team").font(.system(size: 9, weight: .semibold)).foregroundStyle(Color(red: 1.0, green: 0.30, blue: 0.30))
             }
             .lineLimit(1).minimumScaleFactor(0.6).layoutPriority(1)
             Spacer(minLength: 0)

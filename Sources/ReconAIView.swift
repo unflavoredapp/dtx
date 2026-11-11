@@ -379,15 +379,31 @@ struct AIUsageBar: View {
     let usage: ReconstructAPI.AIUsage
     /// slim variant that sits inside the composer bar (no background of its own)
     var compact = false
+    /// DTX spent in this chat. When set, the bar counts DTX instead of tokens.
+    var dtxSpent: Int? = nil
+    /// The wallet balance, or nil when signed out.
+    var dtxBalance: Int? = nil
+    /// Staff and admin are not charged.
+    var unmetered = false
+
+    private var usedText: String {
+        if let d = dtxSpent { return "\(usage.src == "estimate" ? "≈ " : "")\(d) DTX used" }
+        return "\(usage.src == "estimate" ? "≈ " : "")\(fmtTok(usage.used)) used"
+    }
+
+    private var leftText: String {
+        guard dtxSpent != nil, !unmetered else { return "∞ left" }   // no cap to count down
+        guard let b = dtxBalance else { return "Sign in" }
+        return "\(compactCount(b)) DTX left"
+    }
 
     var body: some View {
-        // Staff and admin have no cap, so there is no "left" to count down: the bar is full and the figure is ∞.
         HStack(spacing: compact ? 8 : 10) {
-            Label("\(usage.src == "estimate" ? "≈ " : "")\(fmtTok(usage.used)) used", systemImage: "chart.bar.fill")
+            Label(usedText, systemImage: dtxSpent == nil ? "chart.bar.fill" : "bitcoinsign.circle")
             Capsule()
                 .fill(LinearGradient(colors: [Color.dtAccent.opacity(0.75), Color.dtAccent.opacity(0.25)], startPoint: .leading, endPoint: .trailing))
                 .frame(height: compact ? 3 : 4)
-            Text("∞ left").font(.system(size: compact ? 11 : 12, weight: .semibold))
+            Text(leftText).font(.system(size: compact ? 11 : 12, weight: .semibold))
         }
         .font(.system(size: compact ? 11 : 12).monospacedDigit())
         .foregroundStyle(.secondary)
