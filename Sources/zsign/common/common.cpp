@@ -6,6 +6,8 @@
 #include <openssl/sha.h>
 #include "Utils.hpp"
 #include <fstream>
+#include <pthread.h>
+#include <sys/time.h>
 
 #define PARSEVALIST(szFormatArgs, szArgs)                       \
     ZBuffer buffer;                                             \
@@ -706,11 +708,28 @@ void ZLog::SetLogLever(int nLogLevel)
 // Lock-free line logging: build the full (optionally colored) line and emit it
 // with ONE write(). Writes <= PIPE_BUF don't interleave (POSIX), so parallel
 // signing threads log cleanly without any mutex.
+//
+// Each write starts with a stamp, "@@T<thread id>@<microseconds since 1970>@@", so the app's signer log can
+// show which parallel-signing thread wrote the line and when. ConsoleCapture (SignEngine.swift) removes the
+// stamp for screens that don't ask for it. The log file is written without it.
 static inline void _zwriteLine(const char *prefix, const char *msg, const char *suffix) {
-    std::string line;
-    if (prefix) line += prefix;
-    if (msg)    line += msg;
-    if (suffix) line += suffix;
+    uint64_t tid = 0;
+    pthread_threadid_np(NULL, &tid);
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    char stamp[64];
+    snprintf(stamp, sizeof(stamp), "@@T%llu@%lld@@", (unsigned long long)tid,
+             (long long)tv.tv_sec * 1000000LL + (long long)tv.tv_usec);
+    std::string body;
+    if (prefix) body += prefix;
+    if (msg)    body += msg;
+    if (suffix) body += suffix;
+    // a message that holds several lines gets the stamp on each of them
+    std::string line(stamp);
+    for (size_t i = 0; i < body.size(); i++) {
+        line += body[i];
+        if (body[i] == '\n' && i + 1 < body.size()) line += stamp;
+    }
     write(STDOUT_FILENO, line.data(), line.size());
 }
 
@@ -731,7 +750,7 @@ void ZLog::Print(int nLevel, const char *szLog)
 {
     if (g_nLogLevel >= nLevel)
     {
-        write(STDOUT_FILENO, szLog, strlen(szLog));
+        _zwriteLine(NULL, szLog, NULL);
         writeToLogFile(szLog);
     }
 }
@@ -739,7 +758,7 @@ void ZLog::Print(int nLevel, const char *szLog)
 void ZLog::PrintV(int nLevel, const char *szFormatArgs, ...) {
     if (g_nLogLevel >= nLevel) {
         PARSEVALIST(szFormatArgs, szLog)
-        write(STDOUT_FILENO, szLog, strlen(szLog));
+        _zwriteLine(NULL, szLog, NULL);
         writeToLogFile(szLog);
     }
 }
@@ -804,7 +823,7 @@ void ZLog::Print(const char *szLog)
 {
     if (g_nLogLevel >= E_INFO)
     {
-        write(STDOUT_FILENO, szLog, strlen(szLog));
+        _zwriteLine(NULL, szLog, NULL);
         writeToLogFile(szLog);
     }
 }
@@ -814,7 +833,7 @@ void ZLog::PrintV(const char *szFormatArgs, ...)
     if (g_nLogLevel >= E_INFO)
     {
         PARSEVALIST(szFormatArgs, szLog)
-        write(STDOUT_FILENO, szLog, strlen(szLog));
+        _zwriteLine(NULL, szLog, NULL);
         writeToLogFile(szLog);
     }
 }
@@ -823,7 +842,7 @@ void ZLog::Debug(const char *szLog)
 {
     if (g_nLogLevel >= E_DEBUG)
     {
-        write(STDOUT_FILENO, szLog, strlen(szLog));
+        _zwriteLine(NULL, szLog, NULL);
         writeToLogFile(szLog);
     }
 }
@@ -833,7 +852,7 @@ void ZLog::DebugV(const char *szFormatArgs, ...)
     if (g_nLogLevel >= E_DEBUG)
     {
         PARSEVALIST(szFormatArgs, szLog)
-        write(STDOUT_FILENO, szLog, strlen(szLog));
+        _zwriteLine(NULL, szLog, NULL);
         writeToLogFile(szLog);
     }
 }

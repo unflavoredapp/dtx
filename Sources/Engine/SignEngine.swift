@@ -396,14 +396,15 @@ nonisolated enum Signer {
         material: CertMaterial,
         options o: SignOptions,
         onLog: (@Sendable (String) -> Void)? = nil,
-        captureOutput: Bool = true
+        captureOutput: Bool = true,
+        threadStamps: Bool = false
     ) async throws -> SignOutcome {
         let cacheKey = SignCache.key(ipa: ipaURL, material: material, options: o)
         if let k = cacheKey, let hit = SignCache.lookup(k) {
             onLog?(">>> Same IPA, certificate and options as before — using the cached signed build (instant)")
             return hit
         }
-        let outcome = try await signDetachedUncached(ipaURL: ipaURL, material: material, options: o, onLog: onLog, captureOutput: captureOutput)
+        let outcome = try await signDetachedUncached(ipaURL: ipaURL, material: material, options: o, onLog: onLog, captureOutput: captureOutput, threadStamps: threadStamps)
         if let k = cacheKey { SignCache.store(k, outcome: outcome) }      // APFS clone: instant, and must finish before the caller moves the file
         return outcome
     }
@@ -413,7 +414,9 @@ nonisolated enum Signer {
         material: CertMaterial,
         options o: SignOptions,
         onLog: (@Sendable (String) -> Void)? = nil,
-        captureOutput: Bool = true
+        captureOutput: Bool = true,
+        /// Keep zsign's "@@T<thread>@<µs>@@" stamp at the start of each engine line (the app page's signer log shows it).
+        threadStamps: Bool = false
     ) async throws -> SignOutcome {
         let fm = FileManager.default
         let totalStart = ContinuousClock.now
@@ -461,7 +464,7 @@ nonisolated enum Signer {
         // stdout capture redirects the process-wide file descriptor, so it is
         // intentionally disabled for concurrent bulk jobs. Single-job signing
         // keeps the existing captured console behavior.
-        let capture = captureOutput ? onLog.map { ConsoleCapture($0) } : nil
+        let capture = captureOutput ? onLog.map { ConsoleCapture($0, stamps: threadStamps) } : nil
         capture?.start()
         do {
             let signingStart = ContinuousClock.now
@@ -980,7 +983,9 @@ nonisolated final class ConsoleCapture: @unchecked Sendable {
     private var buffer = Data()
     private let lock = NSLock()
 
-    init(_ onLine: @escaping @Sendable (String) -> Void) { self.onLine = onLine }
+    private let stamps: Bool
+
+    init(_ onLine: @escaping @Sendable (String) -> Void, stamps: Bool = false) { self.onLine = onLine; self.stamps = stamps }
 
     func start() {
         savedOut = dup(fileno(stdout))
@@ -1015,7 +1020,9 @@ nonisolated final class ConsoleCapture: @unchecked Sendable {
     }
 
     private func emit(_ text: String) {
-        let t = text.trimmingCharacters(in: .newlines)
+        var t = text.trimmingCharacters(in: .newlines)
+        // zsign stamps each write with its thread and time; only callers that asked for the stamps get them
+        if !stamps { t = t.replacingOccurrences(of: "@@T[0-9]+@[0-9]+@@", with: "", options: .regularExpression) }
         guard !t.isEmpty else { return }
         onLine(t)
     }

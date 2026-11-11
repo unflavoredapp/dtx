@@ -852,7 +852,7 @@ private struct SignRunPage: View {
         var title: String
         var icon: String
         var state = 0               // 0 waiting, 1 running, 2 done, 3 failed
-        var ms: Int?
+        var us: Int?                // how long the step took, in microseconds
     }
 
     @State private var steps: [Step]
@@ -871,14 +871,19 @@ private struct SignRunPage: View {
               Step(title: "Ready to install", icon: "checkmark.circle")]
         _steps = State(initialValue: s)
     }
-    @State private var log: [String] = []
+    /// One line of the log: who wrote it (a signing thread, or the app itself), microseconds since signing began, the text.
+    struct LogLine { let thread: Int?; let us: Int; let text: String }
+    @State private var log: [LogLine] = []
+    @State private var began = Date()
+    /// zsign's thread ids, numbered T0, T1… in the order they first speak
+    @State private var threads: [String: Int] = [:]
     @State private var result: SignedBuild?
     @State private var error: String?
     @State private var started = false
     @ObservedObject private var installer = NativeInstaller.shared
     @State private var showSetup = false
     @State private var installError: String?
-    @State private var totalMs = 0
+    @State private var totalUs = 0
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -911,35 +916,64 @@ private struct SignRunPage: View {
     private static let crying = Color(red: 0.25, green: 0.60, blue: 1.0)
     private static let thanks = Color(red: 1.0, green: 0.30, blue: 0.30)
 
-    /// A signer line without its terminal colour codes ("[33m", "[0m") and ">>>" marker.
-    private static func clean(_ line: String) -> String {
-        var l = line.replacingOccurrences(of: "\u{001B}?\\[[0-9;]*m", with: "", options: .regularExpression)
-        if l.hasPrefix(">>>") { l = String(l.dropFirst(3)) }
-        return l.trimmingCharacters(in: .whitespaces)
+    private static let stamp = try! NSRegularExpression(pattern: "@@T([0-9]+)@([0-9]+)@@")
+    private static let threadColors: [Color] = [
+        Color(red: 0.64, green: 0.95, blue: 0.42), Color(red: 0.35, green: 0.85, blue: 0.95), Color(red: 0.98, green: 0.84, blue: 0.28),
+        Color(red: 1.0, green: 0.50, blue: 0.75), Color(red: 0.72, green: 0.60, blue: 1.0), Color(red: 0.98, green: 0.62, blue: 0.30),
+    ]
+
+    /// Adds a line the app itself wrote.
+    private func add(_ text: String, at: Date = Date()) {
+        log.append(LogLine(thread: nil, us: max(0, Int(at.timeIntervalSince(began) * 1_000_000)), text: text))
     }
 
-    /// The log as shown. When the signer has to make room for a bigger code signature, its three lines
-    /// (no space, realloc, success) read as our own instead.
+    /// Adds a line from the signer. Engine lines carry "@@T<thread>@<µs since 1970>@@"; that becomes the thread
+    /// number and the time since signing began. The terminal colour codes and the ">>>" marker are dropped.
+    private func addSigner(_ raw: String, arrived: Date) {
+        var l = raw.replacingOccurrences(of: "\u{001B}?\\[[0-9;]*m", with: "", options: .regularExpression)
+        var thread: Int?
+        var at = arrived
+        let ns = l as NSString
+        if let m = Self.stamp.firstMatch(in: l, range: NSRange(location: 0, length: ns.length)) {
+            let id = ns.substring(with: m.range(at: 1))
+            if let n = threads[id] { thread = n } else { thread = threads.count; threads[id] = threads.count }
+            if let us = Double(ns.substring(with: m.range(at: 2))) { at = Date(timeIntervalSince1970: us / 1_000_000) }
+            l = Self.stamp.stringByReplacingMatches(in: l, range: NSRange(location: 0, length: ns.length), withTemplate: "")
+        }
+        l = l.trimmingCharacters(in: .whitespaces)
+        if l.hasPrefix(">>>") { l = String(l.dropFirst(3)).trimmingCharacters(in: .whitespaces) }
+        guard !l.isEmpty else { return }
+        log.append(LogLine(thread: thread, us: max(0, Int(at.timeIntervalSince(began) * 1_000_000)), text: l))
+    }
+
+    /// The log as shown: thread, microseconds, then the line. When the signer has to make room for a bigger
+    /// code signature, its three lines (no space, realloc, success) read as our own instead.
     private var styledLog: AttributedString {
         var out = AttributedString()
-        var growing = false
-        for (i, line) in log.enumerated() {
+        var growing: Set<Int> = []          // per thread, so parallel files don't mix up their "Success"
+        for (i, entry) in log.enumerated() {
+            let line = entry.text
+            let who = entry.thread ?? -1
+            var tag = AttributedString((entry.thread.map { "T\($0)" } ?? "app").padding(toLength: 4, withPad: " ", startingAt: 0))
+            tag.foregroundColor = entry.thread.map { Self.threadColors[$0 % Self.threadColors.count] } ?? Color.secondary
+            var time = AttributedString(String(format: "%8ldµs ", entry.us))
+            time.foregroundColor = Color.secondary
             var piece: AttributedString
             if line.hasPrefix("No Enough CodeSignature Space") {
-                growing = true
+                growing.insert(who)
                 piece = AttributedString("Apple is ")
                 var c = AttributedString("crying"); c.foregroundColor = Self.crying
                 piece.append(c)
             } else if line.hasPrefix("Realloc CodeSignature Space") {
                 piece = AttributedString("Decrypting the space needed"); piece.foregroundColor = Self.thanks
-            } else if growing && line.hasPrefix("Success") {
-                growing = false
+            } else if growing.contains(who) && line.hasPrefix("Success") {
+                growing.remove(who)
                 piece = AttributedString("Thank you Decrypt.Team"); piece.foregroundColor = Self.thanks
             } else {
                 piece = AttributedString(line)
             }
             if i > 0 { out.append(AttributedString("\n")) }
-            out.append(piece)
+            out.append(tag); out.append(time); out.append(piece)
         }
         return out
     }
@@ -979,7 +1013,7 @@ private struct SignRunPage: View {
     }
 
     private var totalTime: String {
-        totalMs < 1000 ? "\(totalMs)ms" : String(format: "%.2fs", Double(totalMs) / 1000)
+        "\(totalUs)µs" + (totalUs >= 1_000_000 ? String(format: " (%.2fs)", Double(totalUs) / 1_000_000) : "")
     }
 
     // MARK: bottom bar: Download, the Decrypt logo and credit, Install
@@ -1044,12 +1078,12 @@ private struct SignRunPage: View {
     /// Each step writes its own line to the log as it starts, finishes or fails.
     private func mark(_ i: Int, _ state: Int, since t: Date? = nil) {
         steps[i].state = state
-        if let t { steps[i].ms = Int(Date().timeIntervalSince(t) * 1000) }
+        if let t { steps[i].us = Int(Date().timeIntervalSince(t) * 1_000_000) }
         let name = steps[i].title
         switch state {
-        case 1: log.append("▸ " + name + "…")
-        case 2: log.append("✓ " + name + (steps[i].ms.map { " · \($0)ms" } ?? ""))
-        case 3: log.append("✗ " + name + " failed")
+        case 1: add("▸ " + name + "…")
+        case 2: add("✓ " + name + (steps[i].us.map { " · \($0)µs" } ?? ""))
+        case 3: add("✗ " + name + " failed")
         default: break
         }
     }
@@ -1057,7 +1091,7 @@ private struct SignRunPage: View {
     private func at(_ title: String) -> Int { steps.firstIndex { $0.title == title } ?? 0 }
 
     private func run() async {
-        let began = Date()
+        began = Date()
         var cur = 0
         var t = Date()
         do {
@@ -1075,7 +1109,7 @@ private struct SignRunPage: View {
                 let source = ipa
                 let r = try await Task.detached { try IPAThinner.thin(source) }.value
                 ipa = r.url
-                log.append("Thinned to arm64: saved " + ByteCountFormatter.string(fromByteCount: r.savedBytes, countStyle: .file))
+                add("Thinned to arm64: saved " + ByteCountFormatter.string(fromByteCount: r.savedBytes, countStyle: .file))
                 mark(cur, 2, since: t)
             }
 
@@ -1087,8 +1121,9 @@ private struct SignRunPage: View {
             o.iconPNG = iconPNG
             o.injectDylibs = injected.map { (url: $0.url, weak: $0.weak) }
             let outcome = try await Signer.signDetached(ipaURL: ipa, material: material, options: o, onLog: { line in
-                Task { @MainActor in let l = Self.clean(line); if !l.isEmpty { log.append(l) } }
-            })
+                let arrived = Date()
+                Task { @MainActor in addSigner(line, arrived: arrived) }
+            }, threadStamps: true)
             mark(cur, 2, since: t)
 
             cur = at("Package signed IPA"); t = Date(); mark(cur, 1)
@@ -1096,7 +1131,7 @@ private struct SignRunPage: View {
             mark(cur, 2, since: t)
 
             cur = at("Ready to install"); mark(cur, 2)
-            totalMs = Int(Date().timeIntervalSince(began) * 1000)
+            totalUs = Int(Date().timeIntervalSince(began) * 1_000_000)
             result = entry
             ActivityStore.shared.log("Sign", "signed `" + entry.name + "` with " + material.name)
         } catch {

@@ -5,7 +5,123 @@
 #include "common/base64.h"
 #include "common/common.h"
 #include <vector>
-#include <dispatch/dispatch.h>
+#include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <thread>
+#include <pthread.h>
+#include <pthread/qos.h>
+#include <unistd.h>
+
+// The worker chain for parallel signing.
+//
+// A fixed set of long-lived worker threads, started once and kept for the life of the app. A batch of jobs
+// is handed to them as one shared counter: each worker takes the next job the moment it finishes its current
+// one, so there is no per-job scheduling. The thread that asked for the batch works on it too, which is what
+// makes nesting safe: a worker signing a folder can hand that folder's files to the chain and still makes
+// progress on them itself even when every other worker is busy.
+//
+// iOS has no way to pin a thread to a core, so "pinned" here means the same workers for every job, at
+// user-initiated priority (the system keeps those on the performance cores while the app is in front).
+namespace {
+class ZWorkers
+{
+public:
+    static ZWorkers &Shared()
+    {
+        static ZWorkers *workers = new ZWorkers();      // never freed: the workers live as long as the app
+        return *workers;
+    }
+
+    size_t Count() const { return m_threads.size(); }
+
+    // Runs fn(0) ... fn(n - 1) and returns when all of them are done.
+    void Run(size_t n, const std::function<void(size_t)> &fn)
+    {
+        if (0 == n) return;
+        struct Batch
+        {
+            std::atomic<size_t> next{0};
+            std::atomic<size_t> done{0};
+            size_t count = 0;
+            const std::function<void(size_t)> *fn = NULL;
+            std::mutex lock;
+            std::condition_variable finished;
+        };
+        std::shared_ptr<Batch> batch = std::make_shared<Batch>();
+        batch->count = n;
+        batch->fn = &fn;
+
+        // Take the next job, run it, take the next. A worker that arrives after the batch is finished finds
+        // the counter past the end and leaves without touching fn.
+        std::function<void()> drain = [batch]() {
+            for (;;)
+            {
+                size_t i = batch->next.fetch_add(1);
+                if (i >= batch->count) break;
+                (*batch->fn)(i);
+                if (batch->done.fetch_add(1) + 1 == batch->count)
+                {
+                    std::lock_guard<std::mutex> guard(batch->lock);
+                    batch->finished.notify_all();
+                }
+            }
+        };
+
+        size_t helpers = n - 1 < m_threads.size() ? n - 1 : m_threads.size();
+        if (helpers > 0)
+        {
+            {
+                std::lock_guard<std::mutex> guard(m_lock);
+                for (size_t i = 0; i < helpers; i++) m_jobs.push_back(drain);
+            }
+            m_wake.notify_all();
+        }
+
+        drain();    // the caller is a worker on its own batch
+
+        std::unique_lock<std::mutex> wait(batch->lock);
+        batch->finished.wait(wait, [&batch]() { return batch->done.load() == batch->count; });
+    }
+
+private:
+    ZWorkers()
+    {
+        long cores = sysconf(_SC_NPROCESSORS_ONLN);
+        size_t count = cores > 2 ? (size_t)cores - 1 : 1;       // the caller is the extra one
+        if (count > 7) count = 7;
+        for (size_t i = 0; i < count; i++)
+        {
+            m_threads.emplace_back([this, i]() {
+                char name[32];
+                snprintf(name, sizeof(name), "zsign.worker.%zu", i + 1);
+                pthread_setname_np(name);
+                pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);
+                for (;;)
+                {
+                    std::function<void()> job;
+                    {
+                        std::unique_lock<std::mutex> wait(m_lock);
+                        m_wake.wait(wait, [this]() { return !m_jobs.empty(); });
+                        job = m_jobs.front();
+                        m_jobs.pop_front();
+                    }
+                    job();
+                }
+            });
+            m_threads.back().detach();
+        }
+    }
+
+    std::vector<std::thread> m_threads;
+    std::deque<std::function<void()>> m_jobs;
+    std::mutex m_lock;
+    std::condition_variable m_wake;
+};
+}
 
 ZAppBundle::ZAppBundle()
 {
@@ -336,7 +452,7 @@ bool ZAppBundle::SignNode(JValue &jvNode)
             std::atomic<bool> *okp = &ok;
             JValue **fp = folders.data();
             ZAppBundle *self = this;
-            dispatch_apply(nFolders, DISPATCH_APPLY_AUTO, ^(size_t i) {
+            ZWorkers::Shared().Run(nFolders, [okp, fp, self](size_t i) {
                 if (!okp->load(std::memory_order_relaxed)) return;
                 if (!self->SignNode(*fp[i])) okp->store(false, std::memory_order_relaxed);
             });
@@ -364,7 +480,7 @@ bool ZAppBundle::SignNode(JValue &jvNode)
             std::atomic<bool> *okp = &ok;
             const string *pf = files.data();
             ZAppBundle *self = this;
-            dispatch_apply(nFiles, DISPATCH_APPLY_AUTO, ^(size_t i) {
+            ZWorkers::Shared().Run(nFiles, [okp, pf, self](size_t i) {
                 if (!okp->load(std::memory_order_relaxed)) return;
                 const string &szFile = pf[i];
                 ZLog::PrintV(">>> SignFile: \t%s\n", szFile.c_str());
@@ -531,6 +647,10 @@ bool ZAppBundle::SignFolder(ZSignAsset *pSignAsset,
     m_pSignAsset = pSignAsset;
     m_bWeakInject = bWeakInject;
     m_bParallel = bParallel;
+    if (m_bParallel)
+    {
+        ZLog::PrintV(">>> Worker chain: %zu workers + this thread, each takes the next job as it finishes one\n", ZWorkers::Shared().Count());
+    }
     if (NULL == m_pSignAsset)
     {
         return false;
