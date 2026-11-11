@@ -1356,11 +1356,12 @@ struct AiDecryptChatView: View {
                     onClose: { setSidebar(false) }
                 )
                 .frame(width: sw)
+                .opacity(sidebarOpen ? 1 : 0).allowsHitTesting(sidebarOpen)      // only there while the menu is open
 
                 chatLayer
                     // opaque backing so the sidebar never shows through the strip under the composer
                     .background(AppBackground())
-                    .clipShape(RoundedRectangle(cornerRadius: sidebarOpen ? 32 : 0, style: .continuous))
+                    .mask { RoundedRectangle(cornerRadius: sidebarOpen ? 32 : 0, style: .continuous).ignoresSafeArea() }
                     .overlay {
                         if sidebarOpen {
                             Color.black.opacity(0.4)
@@ -1804,7 +1805,7 @@ private struct AiLiveStrip: View {
             AIShimmerLine()
             if live.tokens > 0 {
                 HStack(spacing: 12) {
-                    Label("≈ \(DTXWallet.shared.aiCost(tokens: live.tokens)) DTX", systemImage: "bitcoinsign.circle")
+                    Label { Text("≈ \(DTXWallet.shared.aiCost(tokens: live.tokens)) DTX") } icon: { DTXCoin(size: 15) }
                     if live.tps > 0 { Label(String(format: "%.1f tok/s", live.tps), systemImage: "bolt.fill") }
                 }
                 .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)

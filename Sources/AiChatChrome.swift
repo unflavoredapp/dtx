@@ -212,9 +212,11 @@ struct ScreenHost: View {
             ZStack(alignment: .leading) {
                 AppBackground().ignoresSafeArea()
                 AiSidebar(vm: vm, onClose: { set(false) }).frame(width: sw)
+                    .opacity(drawer ? 1 : 0).allowsHitTesting(drawer)      // only there while the menu is open
                 page
                     .background(AppBackground())
-                    .clipShape(RoundedRectangle(cornerRadius: drawer ? 32 : 0, style: .continuous))
+                    // masked past the safe area: clipping to the page's own frame cut its background off above the home indicator, and the menu behind showed through
+                    .mask { RoundedRectangle(cornerRadius: drawer ? 32 : 0, style: .continuous).ignoresSafeArea() }
                     .overlay {
                         if drawer {
                             Color.black.opacity(0.4)

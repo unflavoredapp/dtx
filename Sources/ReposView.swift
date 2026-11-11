@@ -21,9 +21,8 @@ struct ReposView: View {
                             }
                             NavigationLink(value: r) { row(r) }.buttonStyle(.plain)
                             ShareLink(item: r.url) {
-                                Image(systemName: "arrow.up.right.square").font(.system(size: 22, weight: .semibold))
-                                    .foregroundStyle(Color.dtAccent).padding(10)
-                                    .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(Color.dtAccent, lineWidth: 1.5).padding(7))
+                                Image(systemName: "arrow.up.right").font(.system(size: 20, weight: .semibold))
+                                    .foregroundStyle(Color.dtAccent).padding(10).contentShape(Rectangle())
                             }
                         }
                         .padding(.vertical, 10)
@@ -43,11 +42,18 @@ struct ReposView: View {
 
     private func row(_ r: RepoInfo) -> some View {
         HStack(spacing: 14) {
-            Text(String(r.name.prefix(1)).uppercased())
-                .font(.system(size: 30, weight: .bold)).foregroundStyle(Color.dtAccent)
-                .frame(width: 64, height: 64)
-                .background(RoundedRectangle(cornerRadius: 15, style: .continuous).fill(Color.dtAccent.opacity(0.14)))
-                .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(Color.dtAccent.opacity(0.25)))
+            // the source's own icon; its first letter while that loads or when it has none
+            AsyncImage(url: store.meta[r.url]?.icon) { phase in
+                if let img = phase.image { img.resizable().scaledToFill() }
+                else {
+                    Text(String(r.name.prefix(1)).uppercased())
+                        .font(.system(size: 30, weight: .bold)).foregroundStyle(Color.dtAccent)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity).background(Color.dtAccent.opacity(0.14))
+                }
+            }
+            .frame(width: 64, height: 64)
+            .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(Color.dtAccent.opacity(0.25)))
             VStack(alignment: .leading, spacing: 3) {
                 Text(r.name).font(.system(size: 22, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
                 Text(URL(string: r.url)?.host ?? r.url).font(.system(size: 15)).foregroundStyle(.secondary).lineLimit(1)

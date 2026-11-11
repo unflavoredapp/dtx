@@ -97,7 +97,6 @@ struct AppPageView: View {
     @State private var injected: [Injected] = []
     @State private var iconPNG: Data?
     @State private var thin = false
-    @State private var showTools = false
 
     struct Injected: Identifiable { let id = UUID(); let url: URL; var weak = false }
 
@@ -112,7 +111,7 @@ struct AppPageView: View {
                 case .page: AppHeroPage(app: app, chosen: chosen, versionID: $versionID, downloader: downloader)
                 case .options:
                     SignOptionsPage(app: app, downloader: downloader, opts: $opts, name: $name, bundle: $bundle,
-                                    version: $version, injected: $injected, iconPNG: $iconPNG, thin: $thin, showTools: { showTools = true }, onSign: { step = .run })
+                                    version: $version, injected: $injected, iconPNG: $iconPNG, thin: $thin, onChat: { store.pickedApp = nil; store.screen = nil; dismiss() }, onSign: { step = .run })
                 case .run:
                     SignRunPage(app: app, downloader: downloader, opts: opts, name: name, bundle: bundle, version: version,
                                 injected: injected, iconPNG: iconPNG, thin: thin)
@@ -126,14 +125,6 @@ struct AppPageView: View {
             DTXWallet.shared.track(app.bid, "view")
         }
         .overlay(alignment: .bottom) { if step == .page { bottomBar } }
-        .sheet(isPresented: $showTools) {
-            NavigationStack {
-                AppDetailView(app: app)
-                    .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Close") { showTools = false } } }
-            }
-            .environmentObject(store)
-            .preferredColorScheme(.dark)
-        }
     }
 
     // MARK: header
@@ -343,8 +334,9 @@ private struct AppHeroPage: View {
             Text("\(app.versions.count) Version\(app.versions.count == 1 ? "" : "s") Available")
                 .font(.system(size: 13, weight: .bold)).foregroundStyle(.secondary)
             ForEach(app.versions) { v in versionRow(v) }
-            if downloader.state != .idle { serverCard }
+            if downloader.state != .idle && downloader.state != .done { serverCard.transition(.opacity.combined(with: .move(edge: .top))) }
         }
+        .animation(.easeInOut(duration: 0.3), value: downloader.state)
     }
 
     private func versionRow(_ v: AppVersion) -> some View {
@@ -427,7 +419,8 @@ private struct SignOptionsPage: View {
     @Binding var injected: [AppPageView.Injected]
     @Binding var iconPNG: Data?
     @Binding var thin: Bool
-    let showTools: () -> Void
+    /// Leaves this page for the chat (the Ai-Decrypt tool).
+    let onChat: () -> Void
     let onSign: () -> Void
 
     @ObservedObject private var certs = CertificateStore.shared
@@ -435,6 +428,8 @@ private struct SignOptionsPage: View {
     @State private var showPresetName = false
     @State private var presetName = ""
     @State private var open: Set<String> = ["General"]
+    @State private var toolSheet: ToolsHubView.HubSheet?
+    @Environment(\.openURL) private var openURL
     @State private var photo: PhotosPickerItem?
     @State private var showCert = false
     @State private var importing = false
@@ -469,7 +464,7 @@ private struct SignOptionsPage: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                downloadCard
+                if downloader.state != .done { downloadCard.transition(.opacity.combined(with: .move(edge: .top))) }
                 title("SIGNING METHOD")
                 certCard
                 title("APP ICON")
@@ -477,22 +472,23 @@ private struct SignOptionsPage: View {
                 title("APP NAME · BUNDLE ID · VERSION")
                 fieldsCard
                 HStack { title("BUILD OPTIONS"); Spacer(); presetsMenu }
-                thinCard
                 group("General", "slider.horizontal.3", general)
-                group("Strip Content", "scissors", strip)
+                group("Strip Content", "scissors", strip, thinRow: true)
                 group("Entitlement Scrubbers", "key.fill", scrubbers)
                 plistGroup
                 title("DYLIB INJECTION")
                 injectCard
                 title("TOOLS")
-                toolsRow
+                ForEach(ToolsHubView.catalog) { g in toolGroup(g) }
                 Color.clear.frame(height: 92)
             }
+            .animation(.easeInOut(duration: 0.3), value: downloader.state)
             .padding(.horizontal, 14).padding(.top, 5)
         }
         .scrollIndicators(.hidden)
         .overlay(alignment: .bottom) { signButton }
         .sheet(isPresented: $showCert) { CertificateView() }
+        .sheet(item: $toolSheet) { s in ToolsHubView.sheetView(s) }
         .alert("Save preset", isPresented: $showPresetName) {
             TextField("Name", text: $presetName)
             Button("Save") {
@@ -526,15 +522,15 @@ private struct SignOptionsPage: View {
         }
     }
 
-    private var thinCard: some View {
+    /// Lives at the top of Strip Content.
+    private var thinRow: some View {
         Toggle(isOn: $thin) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Thin to arm64 only").font(.system(size: 12, weight: .semibold))
-                Text("Drops other architectures: about 30% smaller, A8+ devices").font(.system(size: 9)).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Thin to arm64 only").font(.system(size: 11))
+                Text("Drops other architectures: about 30% smaller, A8+ devices").font(.system(size: 10)).foregroundStyle(.secondary)
             }
         }
-        .tint(Color.dtAccent).padding(12)
-        .background(RoundedRectangle(cornerRadius: 19, style: .continuous).fill(Color.white.opacity(0.06)))
+        .tint(Color.dtAccent).padding(.horizontal, 14).padding(.vertical, 7)
     }
 
     private func title(_ t: String) -> some View {
@@ -563,8 +559,11 @@ private struct SignOptionsPage: View {
     private var certCard: some View {
         Button { showCert = true } label: {
             HStack(spacing: 12) {
-                Image(systemName: certs.active == nil ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                    .font(.system(size: 20)).foregroundStyle(certs.active == nil ? .orange : Color.dtAccent)
+                if certs.active == nil {
+                    Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 20)).foregroundStyle(.orange)
+                } else {
+                    Image("CertificateIcon").resizable().scaledToFit().frame(width: 40, height: 40)
+                }
                 VStack(alignment: .leading, spacing: 3) {
                     Text(certs.active == nil ? "NO CERTIFICATE" : "USING YOUR SAVED CERTIFICATE")
                         .font(.system(size: 9, weight: .heavy)).tracking(1.5).foregroundStyle(Color.dtAccent)
@@ -639,12 +638,16 @@ private struct SignOptionsPage: View {
 
     private func count(_ flags: [Flag]) -> Int { flags.filter { opts[keyPath: $0.2] }.count }
 
-    private func group(_ title: String, _ icon: String, _ flags: [Flag]) -> some View {
+    private func group(_ title: String, _ icon: String, _ flags: [Flag], thinRow showThin: Bool = false) -> some View {
         let isOpen = open.contains(title)
-        let n = count(flags)
+        let n = count(flags) + (showThin && thin ? 1 : 0)
         return VStack(spacing: 0) {
             groupHeader(title, icon, n, isOpen) { toggle(title) }
             if isOpen {
+                if showThin {
+                    Divider().overlay(Color.white.opacity(0.06))
+                    thinRow
+                }
                 ForEach(0..<flags.count, id: \.self) { i in
                     Divider().overlay(Color.white.opacity(0.06))
                     flagRow(flags[i])
@@ -764,20 +767,50 @@ private struct SignOptionsPage: View {
         }
     }
 
-    private var toolsRow: some View {
-        Button(action: showTools) {
-            HStack(spacing: 10) {
-                Image(systemName: "wand.and.stars").foregroundStyle(Color.dtAccent).frame(width: 24)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Dylibs, frameworks & tools").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white)
-                    Text("Saved libraries, Decrypt & Inject, IPA tools").font(.system(size: 9)).foregroundStyle(.secondary)
+    // MARK: tools
+
+    private static let toolGroupIcons = [
+        "Featured": "star.fill", "Build & Modify": "hammer.fill", "Analyze & Inspect": "magnifyingglass",
+        "Repo & Libraries": "server.rack", "Services": "sparkles", "Manage": "slider.horizontal.3",
+    ]
+
+    /// One group of the Tools hub, as a fold-out list. Each tool opens right here.
+    private func toolGroup(_ g: ToolsHubView.Group) -> some View {
+        let key = "Tools: " + g.title
+        let isOpen = open.contains(key)
+        return VStack(spacing: 0) {
+            groupHeader(g.title, Self.toolGroupIcons[g.title] ?? "wrench.and.screwdriver.fill", 0, isOpen) { toggle(key) }
+            if isOpen {
+                ForEach(g.tools) { t in
+                    Divider().overlay(Color.white.opacity(0.06))
+                    Button { run(t) } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: t.icon).font(.system(size: 13, weight: .semibold)).foregroundStyle(Color.dtAccent).frame(width: 26)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(t.name).font(.system(size: 11, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
+                                Text(t.sub).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                            Spacer(minLength: 0)
+                            Image(systemName: isWeb(t) ? "arrow.up.right" : "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 14).padding(.vertical, 8).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
                 }
-                Spacer()
-                Image(systemName: "chevron.right").foregroundStyle(.secondary)
             }
-            .padding(12).background(RoundedRectangle(cornerRadius: 19, style: .continuous).fill(Color.white.opacity(0.06)))
         }
-        .buttonStyle(.plain)
+        .background(RoundedRectangle(cornerRadius: 19, style: .continuous).fill(Color.white.opacity(0.06)))
+    }
+
+    private func isWeb(_ t: ToolsHubView.Tool) -> Bool { if case .web = t.action { return true } else { return false } }
+
+    private func run(_ t: ToolsHubView.Tool) {
+        ActivityStore.shared.log("Tools", "opened " + t.name)
+        switch t.action {
+        case .sheet(let s): toolSheet = s
+        case .web(let u): if let url = URL(string: u) { openURL(url) }
+        case .chat: onChat()
+        }
     }
 
     private var signButton: some View {

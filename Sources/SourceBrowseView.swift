@@ -215,8 +215,8 @@ struct BrowseAppRow: View {
                     if !app.subtitle.isEmpty { Text(app.subtitle).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1) }
                 }
                 Spacer(minLength: 0)
-                Image(systemName: "arrow.up.right").font(.system(size: 14, weight: .bold)).foregroundStyle(.black)
-                    .frame(width: 40, height: 40).background(Circle().fill(Color.dtAccent))
+                Image(systemName: "arrow.up.right").font(.system(size: 16, weight: .bold)).foregroundStyle(Color.dtAccent)
+                    .frame(width: 40, height: 40)
             }
             if !app.shots.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {

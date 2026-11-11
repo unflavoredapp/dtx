@@ -100,6 +100,12 @@ final class DTXWallet: ObservableObject {
     }
 }
 
+/// The DTX coin artwork, used wherever a DTX amount is shown.
+struct DTXCoin: View {
+    var size: CGFloat = 16
+    var body: some View { Image("DTXCoin").resizable().scaledToFit().frame(width: size, height: size) }
+}
+
 /// 1234 -> "1.2K"
 func compactCount(_ n: Int) -> String {
     switch n {

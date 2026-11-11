@@ -399,7 +399,9 @@ struct AIUsageBar: View {
 
     var body: some View {
         HStack(spacing: compact ? 8 : 10) {
-            Label(usedText, systemImage: dtxSpent == nil ? "chart.bar.fill" : "bitcoinsign.circle")
+            Label { Text(usedText) } icon: {
+                if dtxSpent == nil { Image(systemName: "chart.bar.fill") } else { DTXCoin(size: compact ? 14 : 16) }
+            }
             Capsule()
                 .fill(LinearGradient(colors: [Color.dtAccent.opacity(0.75), Color.dtAccent.opacity(0.25)], startPoint: .leading, endPoint: .trailing))
                 .frame(height: compact ? 3 : 4)

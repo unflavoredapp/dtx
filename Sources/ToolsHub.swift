@@ -49,7 +49,10 @@ struct ToolsHubView: View {
 
     private static let site = "https://decrypt.team/tools"
 
-    private var groups: [Group] {
+    private var groups: [Group] { Self.catalog }
+
+    /// Every tool, grouped. Also listed under Tools in an app's sign options.
+    static var catalog: [Group] {
         let site = Self.site
         return [
             Group(title: "Featured", caption: "Most used tools and services.", columns: 3, tools: [
@@ -125,7 +128,7 @@ struct ToolsHubView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .sheet(item: $sheet) { s in sheetView(s) }
+        .sheet(item: $sheet) { s in Self.sheetView(s) }
     }
 
     // MARK: pieces
@@ -257,7 +260,7 @@ struct ToolsHubView: View {
         }
     }
 
-    @ViewBuilder private func sheetView(_ s: HubSheet) -> some View {
+    @ViewBuilder static func sheetView(_ s: HubSheet) -> some View {
         switch s {
         case .signer: SignerView()
         case .batch: BatchView()

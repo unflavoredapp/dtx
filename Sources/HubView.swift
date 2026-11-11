@@ -85,6 +85,7 @@ struct HubView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("DTX BALANCE").font(.system(size: 11, weight: .bold)).foregroundStyle(.secondary)
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    DTXCoin(size: 34).alignmentGuide(.firstTextBaseline) { d in d[.bottom] - 4 }
                     Text("\(wallet.balance)").font(.system(size: 38, weight: .bold, design: .rounded)).foregroundStyle(Color.dtAccent)
                     Text("DTX").font(.system(size: 15, weight: .semibold)).foregroundStyle(.secondary)
                 }

@@ -196,6 +196,10 @@ struct TopBarHost: ViewModifier {
     @State private var barHeight: CGFloat = 64
 
     private var searchOpen: Bool { store.searchOpen && store.tab == tab }
+    /// Browse (the sources list and a source's apps) shows a search button in place of New chat.
+    private var searchLeads: Bool {
+        tab == .repos && actions.contains { if case .search = $0 { return true } else { return false } }
+    }
 
     func body(content: Content) -> some View {
         content
@@ -247,11 +251,21 @@ struct TopBarHost: ViewModifier {
                 .accessibilityLabel(back == nil ? "Menu" : "Back")
                 Spacer()
                 HStack(spacing: 0) {
-                    Button { store.closeSearch(); store.screen = nil; dismiss(); store.newChatTick += 1 } label: {
-                        Image(systemName: "square.and.pencil").font(.system(size: 19, weight: .medium)).foregroundStyle(.white)
-                            .frame(width: 50, height: 46)
+                    if searchLeads {
+                        Button {
+                            if searchOpen { store.closeSearch() } else { store.tab = tab; store.searchOpen = true }
+                        } label: {
+                            Image(systemName: searchOpen ? "xmark" : "magnifyingglass").font(.system(size: 19, weight: .medium)).foregroundStyle(.white)
+                                .frame(width: 50, height: 46)
+                        }
+                        .accessibilityLabel(searchOpen ? "Close search" : "Search")
+                    } else {
+                        Button { store.closeSearch(); store.screen = nil; dismiss(); store.newChatTick += 1 } label: {
+                            Image(systemName: "square.and.pencil").font(.system(size: 19, weight: .medium)).foregroundStyle(.white)
+                                .frame(width: 50, height: 46)
+                        }
+                        .accessibilityLabel("New chat")
                     }
-                    .accessibilityLabel("New chat")
                     Menu {
                         ForEach(Array(actions.enumerated()), id: \.offset) { item in menuItems(item.element) }
                         Divider()
@@ -286,7 +300,7 @@ struct TopBarHost: ViewModifier {
     @ViewBuilder private func menuItems(_ a: BarAction) -> some View {
         switch a {
         case .search:
-            Button { store.tab = tab; store.searchOpen.toggle() } label: { Label("Search", systemImage: "magnifyingglass") }
+            if !searchLeads { Button { store.tab = tab; store.searchOpen.toggle() } label: { Label("Search", systemImage: "magnifyingglass") } }
         case .lock:
             Button { store.showQuickBuild = true } label: { Label("Decrypt & Inject", systemImage: "lock.open") }
         case .icon(let name, let run):
