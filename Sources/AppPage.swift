@@ -407,6 +407,14 @@ private struct AppHeroPage: View {
     }
 }
 
+/// A certificate named after a device UDID is shown with its middle hidden: "00008110-••••••••E01E".
+/// Any other name is shown as it is.
+private func maskedUDID(_ name: String) -> String {
+    let hex = name.filter { $0 != "-" }
+    guard hex.count >= 24, hex.allSatisfy({ $0.isHexDigit }) else { return name }
+    return String(name.prefix(8)) + "-••••••••" + String(name.suffix(4))
+}
+
 // MARK: - Sign options
 
 private struct SignOptionsPage: View {
@@ -566,7 +574,7 @@ private struct SignOptionsPage: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(certs.active == nil ? "NO CERTIFICATE" : "USING YOUR SAVED CERTIFICATE")
                         .font(.system(size: 9, weight: .heavy)).tracking(1.5).foregroundStyle(Color.dtAccent)
-                    Text(certs.active?.name ?? "Add a .p12 and profile").font(.system(size: 15, weight: .bold)).foregroundStyle(.white).lineLimit(1)
+                    Text(certs.active.map { maskedUDID($0.name) } ?? "Add a .p12 and profile").font(.system(size: 15, weight: .bold)).foregroundStyle(.white).lineLimit(1)
                     Text(certDetail).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer()
@@ -870,22 +878,25 @@ private struct SignRunPage: View {
     @ObservedObject private var installer = NativeInstaller.shared
     @State private var showSetup = false
     @State private var installError: String?
+    @State private var totalMs = 0
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("SIGNER LOG").font(.system(size: 9, weight: .heavy)).tracking(4).foregroundStyle(.secondary)
-                    Text(log.joined(separator: "\n")).font(.system(size: 10, design: .monospaced)).foregroundStyle(.white.opacity(0.85))
+                    Text(styledLog).font(.system(size: 10, design: .monospaced)).foregroundStyle(.white.opacity(0.85))
                         .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
                     if result == nil && error == nil { ProgressView().scaleEffect(0.7) }
                     if let error { Text(error).font(.system(size: 11)).foregroundStyle(.red) }
+                    if let r = result { summary(r) }
                     Color.clear.frame(height: 96).id("end")
                 }
                 .padding(.horizontal, 15).padding(.top, 7)
             }
             .scrollIndicators(.hidden)
             .onChange(of: log.count) { _ in proxy.scrollTo("end", anchor: .bottom) }     // follows the log as it grows
+            .onChange(of: result) { _ in DispatchQueue.main.async { withAnimation { proxy.scrollTo("end", anchor: .bottom) } } }   // brings the summary rows into view
         }
         .overlay(alignment: .bottom) { bottomBar }
         .task { if !started { started = true; await run() } }
@@ -895,7 +906,83 @@ private struct SignRunPage: View {
         } message: { Text(installError ?? "") }
     }
 
-    // MARK: bottom bar: Download, the app and credit, Install
+    // MARK: log text
+
+    private static let crying = Color(red: 0.25, green: 0.60, blue: 1.0)
+    private static let thanks = Color(red: 1.0, green: 0.30, blue: 0.30)
+
+    /// A signer line without its terminal colour codes ("[33m", "[0m") and ">>>" marker.
+    private static func clean(_ line: String) -> String {
+        var l = line.replacingOccurrences(of: "\u{001B}?\\[[0-9;]*m", with: "", options: .regularExpression)
+        if l.hasPrefix(">>>") { l = String(l.dropFirst(3)) }
+        return l.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// The log as shown. When the signer has to make room for a bigger code signature, its three lines
+    /// (no space, realloc, success) read as our own instead.
+    private var styledLog: AttributedString {
+        var out = AttributedString()
+        var growing = false
+        for (i, line) in log.enumerated() {
+            var piece: AttributedString
+            if line.hasPrefix("No Enough CodeSignature Space") {
+                growing = true
+                piece = AttributedString("Apple is ")
+                var c = AttributedString("crying"); c.foregroundColor = Self.crying
+                piece.append(c)
+            } else if line.hasPrefix("Realloc CodeSignature Space") {
+                piece = AttributedString("Decrypting the space needed"); piece.foregroundColor = Self.thanks
+            } else if growing && line.hasPrefix("Success") {
+                growing = false
+                piece = AttributedString("Thank you Decrypt.Team"); piece.foregroundColor = Self.thanks
+            } else {
+                piece = AttributedString(line)
+            }
+            if i > 0 { out.append(AttributedString("\n")) }
+            out.append(piece)
+        }
+        return out
+    }
+
+    // MARK: summary rows
+
+    /// Plain log-style lines; the certificate line carries a small certificate icon and the days it has left.
+    private func summary(_ r: SignedBuild) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            summaryRow("App name", r.name)
+            summaryRow("Bundle ID", r.bundleID)
+            summaryRow("Version", r.version)
+            summaryRow("Total time", totalTime)
+            summaryRow("Certificate", maskedUDID(r.certName) + (daysLeft.map { " · " + $0 } ?? ""), icon: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func summaryRow(_ label: String, _ value: String, icon: Bool = false) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            if icon {
+                Image("CertificateIcon").resizable().scaledToFit().frame(width: 11, height: 11)
+                    .alignmentGuide(.firstTextBaseline) { d in d[.bottom] - 1 }
+            }
+            (Text(label + ": ").foregroundColor(.secondary) + Text(value).foregroundColor(.white.opacity(0.85)))
+                .font(.system(size: 10, design: .monospaced)).textSelection(.enabled)
+        }
+    }
+
+    /// "241 days left", read from the active certificate's profile; nil when the expiry can't be read.
+    private var daysLeft: String? {
+        guard let c = CertificateStore.shared.active, let data = try? Data(contentsOf: c.provisionURL),
+              let e = CertificateStore.profileInfo(data).expires else { return nil }
+        let d = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: Date()), to: Calendar.current.startOfDay(for: e)).day ?? 0
+        if d < 0 { return "expired" }
+        return d == 0 ? "expires today" : "\(d) day\(d == 1 ? "" : "s") left"
+    }
+
+    private var totalTime: String {
+        totalMs < 1000 ? "\(totalMs)ms" : String(format: "%.2fs", Double(totalMs) / 1000)
+    }
+
+    // MARK: bottom bar: Download, the Decrypt logo and credit, Install
 
     private var installing: Bool { installer.isActive && installer.job?.bundleID == result?.bundleID }
 
@@ -910,11 +997,8 @@ private struct SignRunPage: View {
             }
             Spacer(minLength: 0)
             VStack(spacing: 3) {
-                Group {
-                    if let d = iconPNG, let ui = UIImage(data: d) { Image(uiImage: ui).resizable().scaledToFill() }
-                    else { AppIconView(url: app.icon, name: app.name, size: 26) }
-                }
-                .frame(width: 26, height: 26).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                Image("Logo").resizable().scaledToFill()
+                    .frame(width: 26, height: 26).clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 Text("Made by ᴍƦᴢᴇꜰΛ").font(.system(size: 11, weight: .heavy)).foregroundStyle(Color(red: 0.94, green: 0.52, blue: 0.17))
                 Text("Powered by Decrypt.Team").font(.system(size: 9, weight: .semibold)).foregroundStyle(Color(red: 1.0, green: 0.30, blue: 0.30))
             }
@@ -973,6 +1057,7 @@ private struct SignRunPage: View {
     private func at(_ title: String) -> Int { steps.firstIndex { $0.title == title } ?? 0 }
 
     private func run() async {
+        let began = Date()
         var cur = 0
         var t = Date()
         do {
@@ -1002,7 +1087,7 @@ private struct SignRunPage: View {
             o.iconPNG = iconPNG
             o.injectDylibs = injected.map { (url: $0.url, weak: $0.weak) }
             let outcome = try await Signer.signDetached(ipaURL: ipa, material: material, options: o, onLog: { line in
-                Task { @MainActor in log.append(line) }
+                Task { @MainActor in let l = Self.clean(line); if !l.isEmpty { log.append(l) } }
             })
             mark(cur, 2, since: t)
 
@@ -1011,7 +1096,7 @@ private struct SignRunPage: View {
             mark(cur, 2, since: t)
 
             cur = at("Ready to install"); mark(cur, 2)
-            log.append(entry.name + " · v" + entry.version + " · " + entry.sizeString + " · " + entry.certName)
+            totalMs = Int(Date().timeIntervalSince(began) * 1000)
             result = entry
             ActivityStore.shared.log("Sign", "signed `" + entry.name + "` with " + material.name)
         } catch {
