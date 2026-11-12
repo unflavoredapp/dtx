@@ -927,8 +927,9 @@ private struct SignRunPage: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("SIGNER LOG").font(.system(size: 9, weight: .heavy)).tracking(4).foregroundStyle(.secondary)
-                    Text(styledLog).font(.system(size: 10, design: .monospaced)).foregroundStyle(.white.opacity(0.85))
+                    Text(styledLog()).font(.system(size: 10, design: .monospaced)).foregroundStyle(.white.opacity(0.85))
                         .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                    if !dagNodes.isEmpty { dagChart }
                     if result == nil && served == nil && error == nil { ProgressView().scaleEffect(0.7) }
                     if let error { Text(error).font(.system(size: 11)).foregroundStyle(.red) }
                     if let r = result { summary(name: r.name, bundleID: r.bundleID, version: r.version, cert: r.certName) }
@@ -960,6 +961,17 @@ private struct SignRunPage: View {
         Color(red: 0.64, green: 0.95, blue: 0.42), Color(red: 0.35, green: 0.85, blue: 0.95), Color(red: 0.98, green: 0.84, blue: 0.28),
         Color(red: 1.0, green: 0.50, blue: 0.75), Color(red: 0.72, green: 0.60, blue: 1.0), Color(red: 0.98, green: 0.62, blue: 0.30),
     ]
+    private static let decrypt = Color(red: 1.0, green: 0.30, blue: 0.30)
+    private static let bar = Color(red: 0.98, green: 0.84, blue: 0.28)
+
+    /// Lines the signer itself prints (not ones this view adds, like "Send job…" or "Fetching IPA…"). These get
+    /// the old ">>> " dispatch marker back; everything else stays plain.
+    private static let dagPrefixes = [
+        "Unzip:", "Unzip OK!", "Signing:", "Signing OK!", "SignFolder:", "SignFile:", "AppName:", "BundleId:",
+        "Version:", "TeamId:", "SubjectCN:", "ReadCache:", "Workers:", "Archive:", "Archive OK!", "Grand total",
+        "[SmartArchive]", "[Archive]", "Checking:",
+    ]
+    private static func isDag(_ line: String) -> Bool { Self.dagPrefixes.contains { line.hasPrefix($0) } }
 
     /// Adds a line the app itself wrote.
     private func add(_ text: String, at: Date = Date()) {
@@ -985,37 +997,114 @@ private struct SignRunPage: View {
         log.append(LogLine(thread: thread, us: max(0, Int(at.timeIntervalSince(began) * 1_000_000)), text: l))
     }
 
+    /// Lines the DAG-solver header replaces: the raw "Workers: N pinned…" line zsign prints once per job, right
+    /// before it starts dispatching nested bundles to the chain.
+    private static let workersDigits = try! NSRegularExpression(pattern: "([0-9]+)")
+
     /// The log as shown: thread, microseconds, then the line. When the signer has to make room for a bigger
-    /// code signature, its three lines (no space, realloc, success) read as our own instead.
-    private var styledLog: AttributedString {
+    /// code signature, its three lines (no space, realloc, success) read as our own instead. The signer's own
+    /// "Workers: N pinned…" line becomes a small DAG-solver header, matching the old layout: who's dispatching,
+    /// to how many nodes. Every other line the signer itself prints gets its ">>> " marker back.
+    private func styledLog() -> AttributedString {
         var out = AttributedString()
         var growing: Set<Int> = []          // per thread, so parallel files don't mix up their "Success"
-        for (i, entry) in log.enumerated() {
+        var wroteLine = false
+        let totalNodes = log.reduce(0) { $0 + (($1.text.hasPrefix("SignFolder:")) ? 1 : 0) }
+
+        func emit(_ piece: AttributedString) {
+            if wroteLine { out.append(AttributedString("\n")) }
+            out.append(piece)
+            wroteLine = true
+        }
+        func dagHeader(_ text: String) -> AttributedString {
+            var line = AttributedString("[")
+            line.foregroundColor = Color.secondary
+            var brand = AttributedString("Decrypt.Team"); brand.foregroundColor = Self.decrypt
+            line.append(brand)
+            var rest = AttributedString("] " + text); rest.foregroundColor = Color.secondary
+            line.append(rest)
+            return line
+        }
+
+        for entry in log {
             let line = entry.text
             let who = entry.thread ?? -1
+
+            if line.hasPrefix("Workers:") {
+                let ns = line as NSString
+                let w = Self.workersDigits.firstMatch(in: line, range: NSRange(location: 0, length: ns.length))
+                    .map { ns.substring(with: $0.range) } ?? "?"
+                emit(dagHeader("DAG Solver: \(totalNodes) nodes | \(w) workers | lock-free queue"))
+                emit(dagHeader("CPU Affinity: pinning \(w) workers, one per core"))
+                continue
+            }
+
             let label = entry.thread.map { (entry.worker ? "W" : "T") + "\($0)" } ?? (entry.worker ? "srv" : "app")
             var tag = AttributedString(label.padding(toLength: 4, withPad: " ", startingAt: 0))
             tag.foregroundColor = entry.thread.map { Self.threadColors[$0 % Self.threadColors.count] } ?? Color.secondary
             var time = AttributedString(String(format: "%8ldµs ", entry.us))
             time.foregroundColor = Color.secondary
             var piece: AttributedString
-            if line.hasPrefix("No Enough CodeSignature Space") {
+            let lower = line.lowercased()      // zsign's wording differs a little between the phone's build and the server's
+            if lower.hasPrefix("no enough codesignature space") || lower.hasPrefix("can't find codesignature segment") {
                 growing.insert(who)
                 piece = AttributedString("Apple is ")
                 var c = AttributedString("crying"); c.foregroundColor = Self.crying
                 piece.append(c)
-            } else if line.hasPrefix("Realloc CodeSignature Space") {
+            } else if lower.hasPrefix("realloc codesignature space") {
                 piece = AttributedString("Decrypting the space needed"); piece.foregroundColor = Self.thanks
-            } else if growing.contains(who) && line.hasPrefix("Success") {
+            } else if growing.contains(who) && lower.hasPrefix("success") {
                 growing.remove(who)
                 piece = AttributedString("Thank you Decrypt.Team"); piece.foregroundColor = Self.thanks
+            } else if Self.isDag(line) {
+                var arrow = AttributedString(">>> "); arrow.foregroundColor = Color.secondary
+                piece = arrow; piece.append(AttributedString(line))
             } else {
                 piece = AttributedString(line)
             }
-            if i > 0 { out.append(AttributedString("\n")) }
-            out.append(tag); out.append(time); out.append(piece)
+            var row = AttributedString()
+            row.append(tag); row.append(time); row.append(piece)
+            emit(row)
         }
         return out
+    }
+
+    /// One nested bundle's name and how long it took to sign, parsed from its "SignFolder: <path>, (<name>)" line.
+    /// Ends at the next bundle's start, or at "Signing OK!" for the last one — so the chart only shows once the
+    /// dispatch phase is actually finished and every duration is real.
+    private struct DagNode: Identifiable { let id = UUID(); let name: String; let us: Int }
+
+    private var dagNodes: [DagNode] {
+        var starts: [(name: String, us: Int)] = []
+        for entry in log where entry.text.hasPrefix("SignFolder:") {
+            guard let open = entry.text.lastIndex(of: "("), let close = entry.text.lastIndex(of: ")"), open < close else { continue }
+            starts.append((String(entry.text[entry.text.index(after: open)..<close]), entry.us))
+        }
+        guard starts.count > 1, let done = log.first(where: { $0.text.hasPrefix("Signing OK!") }) else { return [] }
+        var ends = starts.dropFirst().map(\.us); ends.append(done.us)
+        return zip(starts, ends).map { DagNode(name: $0.0.name, us: max(1, $0.1 - $0.0.us)) }
+    }
+
+    private var dagChart: some View {
+        let nodes = dagNodes
+        let maxUs = max(1, nodes.map(\.us).max() ?? 1)
+        let threadCount = Set(log.compactMap { $0.text.hasPrefix("SignFolder:") ? $0.thread : nil }).count
+        let spread = (nodes.map(\.us).max() ?? 0)
+        return VStack(alignment: .leading, spacing: 2) {
+            ForEach(nodes) { n in
+                HStack(spacing: 6) {
+                    Text(n.name).font(.system(size: 9, design: .monospaced)).foregroundStyle(.secondary)
+                        .frame(width: 96, alignment: .leading).lineLimit(1).truncationMode(.middle)
+                    Rectangle().fill(Self.bar)
+                        .frame(width: max(2, CGFloat(n.us) / CGFloat(maxUs) * 120), height: 7)
+                    Text(String(format: "%.3fs", Double(n.us) / 1_000_000))
+                        .font(.system(size: 9, design: .monospaced)).foregroundStyle(.secondary)
+                }
+            }
+            (Text("[").foregroundColor(.secondary) + Text("Decrypt.Team").foregroundColor(Self.decrypt)
+                + Text("] DAG dispatch spread: \(spread)µs across \(max(1, threadCount)) threads").foregroundColor(.secondary))
+                .font(.system(size: 9, design: .monospaced)).padding(.top, 2)
+        }
     }
 
     // MARK: summary rows
