@@ -543,8 +543,18 @@ extension ZefvCert {
     }
 }
 
-// MARK: - One-tap link-up (phone only: sign in to GitHub, link a repo, done)
+// MARK: - Certs-branch helpers (GitHub fallback for the public pack)
 
+nonisolated enum CertGitError: LocalizedError {
+    case badConfig(String)
+    var errorDescription: String? {
+        switch self { case .badConfig(let m): return m }
+    }
+}
+
+/// Ensures the optional GitHub `certs` fallback branch exists. The public
+/// tetherless.dev pack is the primary path; this does not install a certbot
+/// Actions pipeline (private CA pack is published by `server/ota/scripts`).
 nonisolated enum CertSourceLinker {
     struct Report: Sendable {
         var repoOK = false
@@ -552,6 +562,8 @@ nonisolated enum CertSourceLinker {
         var branchCreated = false
         var notes: [String] = []
     }
+
+    private static let certsBranch = "certs"
 
     private static func gh(_ path: String, token: String, method: String = "GET", body: [String: Any]? = nil,
                            accept: String = "application/vnd.github+json") async throws -> (Int, [String: Any]) {
@@ -569,58 +581,39 @@ nonisolated enum CertSourceLinker {
         return (code, obj)
     }
 
-    /// 1) verify the token sees the repo, 2) install certs.yml + hooks on the default branch
-    ///    if they're missing, 3) create the orphan `certs` branch (README + empty challenge board).
+    /// Verify the token can see the repo, then create an orphan `certs` branch
+    /// (README + empty challenge board) if it is missing.
     static func link(owner: String, repo: String, token: String, forceUpdate: Bool = false) async throws -> Report {
-        guard !token.isEmpty else { throw GitHubError.badConfig("Add a GitHub token in Settings › Access token first.") }
+        _ = forceUpdate
+        guard !token.isEmpty else { throw CertGitError.badConfig("Add a GitHub token in Settings › Access token first.") }
         var rep = Report()
         let base = "/repos/\(owner)/\(repo)"
 
-        let (rc, rj) = try await gh(base, token: token)
-        guard rc == 200 else { throw GitHubError.badConfig("Can't see \(owner)/\(repo) (HTTP \(rc)). Check the repo name and that the token has Contents + Actions + Workflows: Read and write on it.") }
+        let (rc, _) = try await gh(base, token: token)
+        guard rc == 200 else {
+            throw CertGitError.badConfig("Can't see \(owner)/\(repo) (HTTP \(rc)). Check the repo name and that the token can read it.")
+        }
         rep.repoOK = true
-        let defaultBranch = rj["default_branch"] as? String ?? "main"
+        rep.notes.append("Publish pack.json via server/ota (or the publish-ota-pack workflow); no in-app Actions pipeline.")
 
-        // 2) pipeline files — push only what's missing (the app's own push engine).
-        // forceUpdate: push every pipeline file regardless — replaces a stale
-        // certs.yml/hook on main with the app's embedded copy.
-        var missing: [(path: String, data: Data)] = []
-        for f in CertPipeline.files {
-            if forceUpdate { missing.append(f); continue }
-            let (c, _) = try await gh("\(base)/contents/\(f.path)?ref=\(defaultBranch)", token: token)
-            if c == 404 { missing.append(f) }
-        }
-        if !missing.isEmpty {
-            let client = GitHubClient(owner: owner, repo: repo, branch: defaultBranch, token: token)
-            do {
-                _ = try await client.push(files: missing, subpath: "", message: forceUpdate ? "Update OTA cert pipeline (certbot via Actions)" : "Add OTA cert pipeline (certbot via Actions)", progress: { _, _ in })
-                rep.installedFiles = missing.map(\.path)
-            } catch {
-                throw GitHubError.badConfig("Installing the workflow failed: \(error.localizedDescription) — the token needs Workflows: Read and write to add .github/workflows files.")
-            }
-        } else {
-            rep.notes.append("Pipeline already installed on \(defaultBranch).")
-        }
-
-        // 3) certs branch (orphan commit via the Git Data API).
-        let (bc, _) = try await gh("\(base)/branches/\(CertPipeline.branch)", token: token)
+        let (bc, _) = try await gh("\(base)/branches/\(certsBranch)", token: token)
         if bc == 404 {
             func blob(_ text: String) async throws -> String {
                 let (c, j) = try await gh("\(base)/git/blobs", token: token, method: "POST", body: ["content": text, "encoding": "utf-8"])
-                guard c == 201, let sha = j["sha"] as? String else { throw GitHubError.badConfig("blob failed (\(c))") }
+                guard c == 201, let sha = j["sha"] as? String else { throw CertGitError.badConfig("blob failed (\(c))") }
                 return sha
             }
-            let readme = try await blob("# OTA certs\n\nPublished by `.github/workflows/certs.yml`: server.crt (fullchain), server.pem (key), pack.json, challenge.json.\n")
-            let board  = try await blob("{\"records\":[],\"updatedAt\":\"\",\"instructions\":\"Linked. Tap Renew now in the app to issue your first cert.\"}\n")
+            let readme = try await blob("# OTA certs\n\nFallback pack for decrypt.team: server.crt, server.pem, pack.json (private CA for *.tetherless.dev).\n")
+            let board  = try await blob("{\"records\":[],\"updatedAt\":\"\",\"instructions\":\"Certs branch ready. Publish the pack from server/ota.\"}\n")
             let (tc, tj) = try await gh("\(base)/git/trees", token: token, method: "POST", body: ["tree": [
                 ["path": "README.md",      "mode": "100644", "type": "blob", "sha": readme],
                 ["path": "challenge.json", "mode": "100644", "type": "blob", "sha": board],
             ]])
-            guard tc == 201, let tree = tj["sha"] as? String else { throw GitHubError.badConfig("tree failed (\(tc))") }
+            guard tc == 201, let tree = tj["sha"] as? String else { throw CertGitError.badConfig("tree failed (\(tc))") }
             let (cc, cj) = try await gh("\(base)/git/commits", token: token, method: "POST", body: ["message": "init certs branch", "tree": tree, "parents": []])
-            guard cc == 201, let commit = cj["sha"] as? String else { throw GitHubError.badConfig("commit failed (\(cc))") }
-            let (refc, _) = try await gh("\(base)/git/refs", token: token, method: "POST", body: ["ref": "refs/heads/\(CertPipeline.branch)", "sha": commit])
-            guard refc == 201 else { throw GitHubError.badConfig("creating branch failed (\(refc))") }
+            guard cc == 201, let commit = cj["sha"] as? String else { throw CertGitError.badConfig("commit failed (\(cc))") }
+            let (refc, _) = try await gh("\(base)/git/refs", token: token, method: "POST", body: ["ref": "refs/heads/\(certsBranch)", "sha": commit])
+            guard refc == 201 else { throw CertGitError.badConfig("creating branch failed (\(refc))") }
             rep.branchCreated = true
         } else {
             rep.notes.append("certs branch already exists.")
@@ -678,7 +671,7 @@ extension ZefvCert {
     /// Flip "force": true on a pending record in challenge.json (certs branch). The hook
     /// pulls the file every poll and proceeds to validation as soon as it sees it.
     static func forceChallenge(value: String, token: String) async throws {
-        guard !token.isEmpty else { throw GitHubError.badConfig("GitHub token required.") }
+        guard !token.isEmpty else { throw CertGitError.badConfig("GitHub token required.") }
         let o = ServerConfig.certRepoOwner, r = ServerConfig.certRepoName, b = ServerConfig.certBranch
         let url = URL(string: "https://api.github.com/repos/\(o)/\(r)/contents/challenge.json?ref=\(b)")!
         var req = URLRequest(url: url); req.cachePolicy = .reloadIgnoringLocalCacheData
@@ -693,12 +686,12 @@ extension ZefvCert {
               let b64 = (meta["content"] as? String)?.replacingOccurrences(of: "\n", with: ""),
               let raw = Data(base64Encoded: b64),
               var doc = try? JSONSerialization.jsonObject(with: raw) as? [String: Any] else {
-            throw GitHubError.badConfig("Couldn't read challenge.json on \(b).")
+            throw CertGitError.badConfig("Couldn't read challenge.json on \(b).")
         }
         var recs = doc["records"] as? [[String: Any]] ?? []
         var hit = false
         for i in recs.indices where (recs[i]["value"] as? String) == value { recs[i]["force"] = true; hit = true }
-        guard hit else { throw GitHubError.badConfig("That challenge is no longer on the board.") }
+        guard hit else { throw CertGitError.badConfig("That challenge is no longer on the board.") }
         doc["records"] = recs
         doc["updatedAt"] = ISO8601DateFormatter().string(from: Date())
         let newData = try JSONSerialization.data(withJSONObject: doc, options: [.prettyPrinted, .sortedKeys])
@@ -715,7 +708,7 @@ extension ZefvCert {
         ])
         let (_, pr) = try await URLSession.shared.data(for: put)
         guard (200...299).contains((pr as? HTTPURLResponse)?.statusCode ?? 0) else {
-            throw GitHubError.badConfig("Couldn't update challenge.json (HTTP \((pr as? HTTPURLResponse)?.statusCode ?? 0)).")
+            throw CertGitError.badConfig("Couldn't update challenge.json (HTTP \((pr as? HTTPURLResponse)?.statusCode ?? 0)).")
         }
     }
 

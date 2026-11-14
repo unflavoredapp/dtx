@@ -176,7 +176,7 @@ struct OTASettingsView: View {
             ServerConfig.setCertMode("local")
             mode = "local"
             _ = try LocalCAManager.ensureRoot()
-            _ = try LocalCAManager.issueLeaf(host: h, force: true)
+            try LocalCAManager.issueLeaf(host: h)
             _ = OTAFiles.exportLocalCA()
             note = "Leaf issued for \(h). Install the trust profile, then enable it under Certificate Trust Settings."
         } catch { self.error = error.localizedDescription }
