@@ -5,10 +5,9 @@
 //
 //  Default domain is tetherless.dev — the decrypt.team replacement for the
 //  discontinued backloop.dev loopback-HTTPS trick. Point `*.tetherless.dev`
-//  (and ideally `ota.tetherless.dev`) at 127.0.0.1. Default cert mode is a
-//  local CA (the only approach that survives public-CA revocation rules after
-//  backloop.dev); optionally import your own cert or pull a pack from
-//  https://tetherless.dev/pack.json.
+//  (and ideally `ota.tetherless.dev`) at 127.0.0.1. Default cert mode is the
+//  public pack from https://tetherless.dev/pack.json, which OTABootstrap
+//  installs on every launch so OTA is ready without a Settings step.
 //
 
 import Foundation
@@ -39,12 +38,12 @@ nonisolated enum ServerConfig {
     static let certResource = "server"
 
     /// OTA TLS source:
-    ///   "local"  — on-device root CA (default; the sustainable backloop.dev replacement).
-    ///   "custom" — the user's own cert + key for their own domain (imported PEM).
-    ///   "public" — a pack pulled from tetherless.dev (or your own cert source URL).
-    static var certMode: String { UserDefaults.standard.string(forKey: "uzd_cert_mode") ?? "local" }
+    ///   "public" — pack from tetherless.dev (default; installed on every launch).
+    ///   "local"  — on-device root CA.
+    ///   "custom" — imported PEM pair.
+    static var certMode: String { UserDefaults.standard.string(forKey: "uzd_cert_mode") ?? "public" }
     static func setCertMode(_ m: String) { UserDefaults.standard.set(m, forKey: "uzd_cert_mode") }
-    static let certModes = ["local", "custom", "public"]
+    static let certModes = ["public", "local", "custom"]
 
     /// Where the "public" cert comes from. Prefer Feather-compatible pack.json
     /// (`cert` + `key1`/`key2`) at tetherless.dev; a VPS JSON cert.php also works.
@@ -352,6 +351,12 @@ nonisolated enum ZefvCert {
         _ = try NIOSSLPrivateKey(bytes: Array(key), format: .pem)
         try chain.write(to: cachedCrt, options: .atomic)
         try key.write(to: cachedKey, options: .atomic)
+        // Feather-compatible names in Documents (some install paths / debugging expect these).
+        try? chain.write(to: docs.appendingPathComponent("server.crt"), options: .atomic)
+        try? key.write(to: docs.appendingPathComponent("server.pem"), options: .atomic)
+        let sans = sans(fromPEM: chain)
+        let cn = sans.first(where: { $0.hasPrefix("*.") }) ?? sans.first ?? ServerConfig.installHost
+        try? cn.write(to: docs.appendingPathComponent("commonName.txt"), atomically: true, encoding: .utf8)
         let exp = expires.flatMap { ISO8601DateFormatter().date(from: $0) } ?? notAfter(fromPEM: chain)
         let meta = Meta(notAfter: exp, fetchedAt: Date())
         let enc = JSONEncoder(); enc.dateEncodingStrategy = .iso8601
@@ -363,6 +368,12 @@ nonisolated enum ZefvCert {
     static func refreshIfNeeded(token: String? = nil) async -> Meta? {
         guard needsRefresh else { return meta }
         return try? await fetch(token: token)
+    }
+
+    /// Always pull the public pack (ignores the near-expiry buffer). Used on launch.
+    @discardableResult
+    static func installPublicPack(token: String? = nil) async -> Meta? {
+        try? await fetch(token: token)
     }
 
     static func clearCache() {

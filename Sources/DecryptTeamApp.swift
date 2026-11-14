@@ -20,6 +20,7 @@ struct DecryptTeamApp: App {
                 .tint(.dtAccent)
                 .background(TouchProbe())
                 .task { AppTheme.shared.startCycleIfNeeded() }
+                .task { await OTABootstrap.ensurePublicPack(force: true) }
                 .overlay(alignment: .bottom) { VStack(spacing: 8) { UndoUninstallBanner(); NativeInstallBanner() } }
                 .onOpenURL { url in if url.scheme == "decryptteam" { session.nudge() } }
         }
@@ -53,7 +54,14 @@ struct RootView: View {
             live.confirmHealthy()
         }
         .animation(.easeInOut(duration: 0.25), value: session.allowed)
-        .onChange(of: scenePhase) { phase in if phase == .active { Task { await VPNReconnectCoordinator.shared.appBecameActive() }; session.nudge(); if session.allowed { Task { await live.syncIfDue() } } } }
+        .onChange(of: scenePhase) { phase in
+            if phase == .active {
+                Task { await VPNReconnectCoordinator.shared.appBecameActive() }
+                Task { await OTABootstrap.ensurePublicPack() }
+                session.nudge()
+                if session.allowed { Task { await live.syncIfDue() } }
+            }
+        }
         // Pops up over whatever screen is already loading underneath, right after a Telegram login succeeds —
         // never a separate full screen, so the app behind it is already settling in while this shows.
         .overlay { if session.justSignedIn { WelcomePopup().environmentObject(session) } }

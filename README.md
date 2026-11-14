@@ -24,13 +24,13 @@ open DecryptTeam.xcodeproj
 
 ## On-device OTA (tetherless.dev)
 
-Local installs use **ota.tetherless.dev** instead of the discontinued [backloop.dev](https://backloop.dev) service:
+Local installs use **ota.tetherless.dev** instead of the discontinued [backloop.dev](https://backloop.dev) service.
 
 1. DNS: create an A record for `ota.tetherless.dev` (or `*.tetherless.dev`) → `127.0.0.1`.
-2. In the app: Settings → **On-Device OTA** → create the local CA, install the trust profile, enable Full Trust under Settings → General → About → Certificate Trust Settings.
+2. Host a Feather-compatible `https://tetherless.dev/pack.json` — the app **installs this pack on every launch** so OTA needs no Settings step.
 3. Install method stays **OTA (itms-services)** unless you switch to Native VPN install.
 
-Optional: host a Feather-compatible `https://tetherless.dev/pack.json` for “public pack” mode. Prefer the local CA — public CAs revoke shared wildcard private keys (why backloop.dev stopped).
+Local CA remains available under Settings → On-Device OTA if you prefer not to publish a shared key.
 
 ## Next
 Plugin system (analysis tools such as Ghidra headless, class-dump) as server jobs with results shown in the app.
