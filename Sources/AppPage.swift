@@ -1191,7 +1191,7 @@ private struct SignRunPage: View {
         .foregroundStyle(Color.dtAccent).frame(minWidth: 54, minHeight: 44)
     }
 
-    /// Same as InstallSignedButton: opens the setup screen first when native install isn't set up yet.
+    /// Same as InstallSignedButton: native when selected, otherwise OTA over tetherless.dev.
     /// A server-signed build installs over the air from our domain.
     private func install() {
         if let r = served {
@@ -1199,11 +1199,20 @@ private struct SignRunPage: View {
             return
         }
         guard let build = result else { return }
-        guard NativeInstaller.isSelected else { showSetup = true; return }
+        if NativeInstaller.isSelected {
+            Task {
+                do {
+                    try await NativeInstaller.shared.install(build)
+                    ActivityStore.shared.log("Install", "installed `" + build.name + "` on this device")
+                } catch is CancellationError {
+                } catch { installError = error.localizedDescription }
+            }
+            return
+        }
         Task {
             do {
-                try await NativeInstaller.shared.install(build)
-                ActivityStore.shared.log("Install", "installed `" + build.name + "` on this device")
+                try await OTAInstaller.shared.install(build)
+                ActivityStore.shared.log("Install", "OTA install for `" + build.name + "`")
             } catch is CancellationError {
             } catch { installError = error.localizedDescription }
         }

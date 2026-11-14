@@ -10,6 +10,8 @@ struct SettingsView: View {
     @State private var showPlugins = false
     @State private var showAbout = false
     @State private var showChangelog = false
+    @State private var showOTA = false
+    @State private var showDeviceSetup = false
     @State private var confirmSignOut = false
     @State private var confirmClear = false
 
@@ -26,6 +28,12 @@ struct SettingsView: View {
                     header("PLUGINS & UPDATES")
                     row("arrow.triangle.2.circlepath", "Live Update", live.updateAvailable ? "Release \(live.manifest?.rev ?? 0) is available" : (live.rev == 0 ? "Runtime \(Runtime.version) · tap to sync" : "Runtime \(Runtime.version) · release #\(live.rev)")) { showUpdates = true }
                     row("puzzlepiece.extension.fill", "Plugins", "Every tool, its version and switches") { showPlugins = true }
+
+                    header("INSTALL")
+                    HiddenWhenNative {
+                        row("network", "On-Device OTA", "\(ServerConfig.installHost) · tetherless.dev") { showOTA = true }
+                    }
+                    row("antenna.radiowaves.left.and.right", "Install method", NativeInstaller.isSelected ? "Native · built-in VPN" : "OTA (itms-services)") { showDeviceSetup = true }
 
                     header("ACCOUNT")
                     row("person.fill", "Account", "\(session.username ?? "") · \(session.staff ? "Staff" : "Closed beta")") { confirmSignOut = true }
@@ -56,6 +64,8 @@ struct SettingsView: View {
             .sheet(isPresented: $showUpdates) { UpdateCenterView() }
             .sheet(isPresented: $showPlugins) { PluginsTableView() }
             .sheet(isPresented: $showAbout) { aboutSheet }
+            .sheet(isPresented: $showOTA) { OTASettingsView() }
+            .sheet(isPresented: $showDeviceSetup) { DeviceSetupView() }
             .confirmationDialog("Sign out of \(session.username ?? "this account")?", isPresented: $confirmSignOut, titleVisibility: .visible) {
                 Button("Sign out", role: .destructive) { Task { await session.signOut() } }
             }

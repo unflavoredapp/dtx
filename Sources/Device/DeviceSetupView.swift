@@ -26,7 +26,7 @@ struct DeviceSetupView: View {
                     }.disabled(busy)
                     Text(method == "native"
                          ? "Installs straight to this device over a local VPN and a device pairing. Needs a build signed with a profile that allows Network Extensions (packet-tunnel-provider)."
-                         : "Hands the signed IPA to iOS with an itms-services link.")
+                         : "Hands the signed IPA to iOS with an itms-services link over https://\(ServerConfig.installHost) (tetherless.dev — replaces backloop.dev). Set up the local CA under Settings › On-Device OTA.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Connection") {
