@@ -92,6 +92,7 @@ nonisolated enum ZefvCert {
     static var docs: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0] }
     static var cachedCrt: URL { docs.appendingPathComponent("refreshed-server.crt") }
     static var cachedKey: URL { docs.appendingPathComponent("refreshed-server.pem") }
+    static var cachedCA:  URL { docs.appendingPathComponent("refreshed-ca.crt") }
     static var metaURL: URL { docs.appendingPathComponent("refreshed-cert.json") }
 
     static var bundledCrt: URL? { Bundle.main.url(forResource: ServerConfig.certResource, withExtension: "crt") }
@@ -248,10 +249,12 @@ nonisolated enum ZefvCert {
            pack.cert.contains("BEGIN CERTIFICATE"),
            let key = pack.privateKey, key.contains("PRIVATE KEY") {
             var chain = pack.cert
-            if let ca = pack.ca, ca.contains("BEGIN CERTIFICATE"), !chain.contains(ca) {
-                chain += chain.hasSuffix("\n") ? ca : "\n" + ca
+            let caPEM = pack.ca.flatMap { $0.contains("BEGIN CERTIFICATE") ? $0 : nil }
+            if let caPEM, !chain.contains(caPEM) {
+                chain += chain.hasSuffix("\n") ? caPEM : "\n" + caPEM
             }
-            return try store(chain: Data(chain.utf8), key: Data(key.utf8), expires: pack.not_after)
+            return try store(chain: Data(chain.utf8), key: Data(key.utf8),
+                             expires: pack.not_after, caPEM: caPEM.map { Data($0.utf8) })
         }
         return try await fetchFromURL(url)
     }
@@ -320,18 +323,33 @@ nonisolated enum ZefvCert {
             return d
         }
         let packData = try await raw("pack.json")
+        if let pack = try? JSONDecoder().decode(VPSPack.self, from: packData),
+           pack.cert.contains("BEGIN CERTIFICATE"),
+           let key = pack.privateKey, key.contains("PRIVATE KEY") {
+            let caPEM = pack.ca.flatMap { $0.contains("BEGIN CERTIFICATE") ? $0 : nil }
+            return try store(chain: Data(pack.cert.utf8), key: Data(key.utf8),
+                             expires: pack.not_after, caPEM: caPEM.map { Data($0.utf8) })
+        }
         let m: Manifest
         do { m = try JSONDecoder().decode(Manifest.self, from: packData) } catch { throw CertError.badPack("unreadable pack.json") }
         guard let keyFile = m.key, !keyFile.isEmpty else { throw CertError.badPack("pack.json has no key entry") }
         let chain = try await raw(m.bundle)
         let key   = try await raw(keyFile)
-        return try store(chain: chain, key: key, expires: m.expires)
+        let ca = try? await raw("ca.crt")
+        return try store(chain: chain, key: key, expires: m.expires, caPEM: ca)
     }
 
     static func fetchFromURL(_ url: URL) async throws -> Meta {
         var req = URLRequest(url: url); req.cachePolicy = .reloadIgnoringLocalCacheData
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard (resp as? HTTPURLResponse)?.statusCode ?? 0 < 400 else { throw CertError.badPack("HTTP \((resp as? HTTPURLResponse)?.statusCode ?? 0)") }
+        if let pack = try? JSONDecoder().decode(VPSPack.self, from: data),
+           pack.cert.contains("BEGIN CERTIFICATE"),
+           let key = pack.privateKey, key.contains("PRIVATE KEY") {
+            let caPEM = pack.ca.flatMap { $0.contains("BEGIN CERTIFICATE") ? $0 : nil }
+            return try store(chain: Data(pack.cert.utf8), key: Data(key.utf8),
+                             expires: pack.not_after, caPEM: caPEM.map { Data($0.utf8) })
+        }
         let m: Manifest
         do { m = try JSONDecoder().decode(Manifest.self, from: data) } catch { throw CertError.badPack("unreadable pack.json") }
         guard let keyFile = m.key, !keyFile.isEmpty else { throw CertError.badPack("pack.json has no key entry") }
@@ -342,18 +360,21 @@ nonisolated enum ZefvCert {
             guard (r as? HTTPURLResponse)?.statusCode ?? 0 < 400, !d.isEmpty else { throw CertError.badPack("couldn't download \(name)") }
             return d
         }
-        return try store(chain: try await get(m.bundle), key: try await get(keyFile), expires: m.expires)
+        let ca = try? await get("ca.crt")
+        return try store(chain: try await get(m.bundle), key: try await get(keyFile), expires: m.expires, caPEM: ca)
     }
 
     /// Validate (NIOSSL must parse both, key must match the leaf's SAN set) then cache.
-    private static func store(chain: Data, key: Data, expires: String?) throws -> Meta {
+    private static func store(chain: Data, key: Data, expires: String?, caPEM: Data? = nil) throws -> Meta {
         _ = try NIOSSLCertificate.fromPEMBytes(Array(chain))
         _ = try NIOSSLPrivateKey(bytes: Array(key), format: .pem)
         try chain.write(to: cachedCrt, options: .atomic)
         try key.write(to: cachedKey, options: .atomic)
+        if let caPEM { try caPEM.write(to: cachedCA, options: .atomic) }
         // Feather-compatible names in Documents (some install paths / debugging expect these).
         try? chain.write(to: docs.appendingPathComponent("server.crt"), options: .atomic)
         try? key.write(to: docs.appendingPathComponent("server.pem"), options: .atomic)
+        if let caPEM { try? caPEM.write(to: docs.appendingPathComponent("ca.crt"), options: .atomic) }
         let sans = sans(fromPEM: chain)
         let cn = sans.first(where: { $0.hasPrefix("*.") }) ?? sans.first ?? ServerConfig.installHost
         try? cn.write(to: docs.appendingPathComponent("commonName.txt"), atomically: true, encoding: .utf8)
@@ -371,13 +392,74 @@ nonisolated enum ZefvCert {
     }
 
     /// Always pull the public pack (ignores the near-expiry buffer). Used on launch.
+    /// Tries tetherless.dev first, then the GitHub `certs` branch as fallback.
     @discardableResult
     static func installPublicPack(token: String? = nil) async -> Meta? {
-        try? await fetch(token: token)
+        if let meta = try? await fetch(token: token) { return meta }
+        return try? await fetchFromGitHub(token: token)
     }
 
     static func clearCache() {
-        for u in [cachedCrt, cachedKey, metaURL] { try? FileManager.default.removeItem(at: u) }
+        for u in [cachedCrt, cachedKey, cachedCA, metaURL] { try? FileManager.default.removeItem(at: u) }
+    }
+
+    /// True when the pack's CA is present in the system trust store (Full Trust enabled).
+    static func isPackCATrusted() -> Bool {
+        guard let pem = try? String(contentsOf: cachedCA),
+              let der = pemToDER(pem) else { return false }
+        guard let cert = SecCertificateCreateWithData(nil, der as CFData) else { return false }
+        var trust: SecTrust?
+        guard SecTrustCreateWithCertificates(cert, SecPolicyCreateBasicX509(), &trust) == errSecSuccess,
+              let trust else { return false }
+        var err: CFError?
+        return SecTrustEvaluateWithError(trust, &err)
+    }
+
+    /// Writes a .mobileconfig that installs the pack CA as a trusted root.
+    static func writePackCATrustProfile() -> URL? {
+        guard let pem = try? String(contentsOf: cachedCA),
+              let der = pemToDER(pem) else { return nil }
+        let payloadUUID = UUID().uuidString
+        let profileUUID = UUID().uuidString
+        let certB64 = der.base64EncodedString()
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+          <key>PayloadContent</key>
+          <array>
+            <dict>
+              <key>PayloadType</key><string>com.apple.security.root</string>
+              <key>PayloadVersion</key><integer>1</integer>
+              <key>PayloadIdentifier</key><string>team.decrypt.tetherless.packca.\(payloadUUID)</string>
+              <key>PayloadUUID</key><string>\(payloadUUID)</string>
+              <key>PayloadDisplayName</key><string>Uncrypt Tetherless OTA Root</string>
+              <key>PayloadContent</key>
+              <data>\(certB64)</data>
+            </dict>
+          </array>
+          <key>PayloadType</key><string>Configuration</string>
+          <key>PayloadVersion</key><integer>1</integer>
+          <key>PayloadIdentifier</key><string>team.decrypt.tetherless.packca.profile.\(profileUUID)</string>
+          <key>PayloadUUID</key><string>\(profileUUID)</string>
+          <key>PayloadDisplayName</key><string>Uncrypt OTA Trust (tetherless.dev)</string>
+          <key>PayloadDescription</key><string>Trusts the tetherless.dev OTA certificate authority so on-device installs work. After installing, enable Full Trust in Settings › General › About › Certificate Trust Settings.</string>
+          <key>PayloadRemovalDisallowed</key><false/>
+        </dict>
+        </plist>
+        """
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Uncrypt-Tetherless-OTA-Trust.mobileconfig")
+        guard let data = xml.data(using: .utf8) else { return nil }
+        try? data.write(to: url)
+        return url
+    }
+
+    private static func pemToDER(_ pem: String) -> Data? {
+        guard let a = pem.range(of: "-----BEGIN CERTIFICATE-----"),
+              let b = pem.range(of: "-----END CERTIFICATE-----") else { return nil }
+        let b64 = pem[a.upperBound..<b.lowerBound].components(separatedBy: .whitespacesAndNewlines).joined()
+        return Data(base64Encoded: b64)
     }
 
     // MARK: notAfter from the leaf cert (minimal DER walk)

@@ -87,11 +87,22 @@ struct OTASettingsView: View {
 
                 if mode == "public" {
                     Section("tetherless.dev pack") {
-                        Text("Fetches \(ServerConfig.certSourceURL) (Feather/backloop pack.json or cert.php JSON). Public wildcard keys get revoked — prefer Local CA unless you control issuance carefully.")
+                        Text("Auto-installed on launch from \(ServerConfig.certSourceURL) (GitHub certs branch as fallback). After the pack lands, install the CA trust profile once and enable Full Trust.")
                             .font(.footnote).foregroundStyle(.secondary)
+                        LabeledContent("Pack CA trusted") {
+                            Text(ZefvCert.isPackCATrusted() ? "Yes" : "Not yet")
+                                .foregroundStyle(ZefvCert.isPackCATrusted() ? .green : .orange)
+                        }
                         Button(working ? "Pulling…" : "Pull latest pack") {
                             Task { await pullPack() }
                         }.disabled(working)
+                        Button("Install CA trust profile") {
+                            if ZefvCert.isPackCATrusted() { note = "Pack CA already trusted."; return }
+                            if ZefvCert.writePackCATrustProfile() == nil {
+                                error = "No pack CA on disk — pull the pack first."; return
+                            }
+                            OTABootstrap.offerPackCATrustIfNeeded(force: true)
+                        }
                         if let exp = ZefvCert.effectiveNotAfter {
                             let days = Calendar.current.dateComponents([.day], from: Date(), to: exp).day ?? 0
                             Text(days < 0 ? "Pack expired" : "Pack expires in \(days)d · SANs: \(ZefvCert.effectiveSANs.joined(separator: ", "))")
