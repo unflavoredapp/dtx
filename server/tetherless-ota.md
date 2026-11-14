@@ -13,15 +13,17 @@ At your DNS host for `tetherless.dev`:
 
 Same idea as backloop.dev: the name resolves on-device to loopback so installd fetches the manifest/IPA from the app’s local HTTPS server.
 
-## TLS (required)
+## TLS (required for automated OTA)
 
-**Prefer Local CA** (app default): Settings → On-Device OTA → create root + leaf → install trust profile → enable Full Trust.
+The app defaults to **public pack** mode and calls `OTABootstrap.ensurePublicPack` on every launch (and when becoming active). Serve a Feather/backloop-compatible file at:
 
-Do **not** publish a Let’s Encrypt wildcard private key in a public `pack.json`. That is why [backloop.dev was discontinued](https://backloop.dev/) — CAs must revoke compromised keys.
+`https://tetherless.dev/pack.json`
 
-## Optional public pack
+Without that file, launch refresh fails and OTA falls back to any previously cached pack (or errors if none).
 
-If you still want Feather-compatible “Update SSL Certificates” style refresh, place a JSON file at `https://tetherless.dev/pack.json`:
+Do **not** publish a Let’s Encrypt wildcard private key in a public `pack.json` if you can avoid it — that is why [backloop.dev was discontinued](https://backloop.dev/). If you must automate like backloop, expect revocation and re-issue, or use Local CA under Settings → On-Device OTA.
+
+## pack.json shape
 
 ```json
 {

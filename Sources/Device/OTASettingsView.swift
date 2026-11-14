@@ -22,7 +22,7 @@ struct OTASettingsView: View {
         NavigationStack {
             List {
                 Section {
-                    Text("Installs signed IPAs with itms-services over https://\(ServerConfig.installHost). Point `*.\(ServerConfig.certDomain)` at 127.0.0.1 (same idea as backloop.dev). Default TLS is a local CA on this phone — public CAs revoke any wildcard whose private key is published.")
+                    Text("Installs signed IPAs with itms-services over https://\(ServerConfig.installHost). The public pack from tetherless.dev is installed automatically on every launch. Point `*.\(ServerConfig.certDomain)` at 127.0.0.1 (same idea as backloop.dev).")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
 
@@ -39,9 +39,9 @@ struct OTASettingsView: View {
 
                 Section("Cert mode") {
                     Picker("Mode", selection: $mode) {
+                        Text("tetherless.dev pack").tag("public")
                         Text("Local CA").tag("local")
                         Text("Own TLS cert").tag("custom")
-                        Text("tetherless.dev pack").tag("public")
                     }
                     .onChange(of: mode) { m in
                         ServerConfig.setCertMode(m)
@@ -124,8 +124,8 @@ struct OTASettingsView: View {
     private var modeBlurb: String {
         switch mode {
         case "custom": return "Use a PEM fullchain + key you control for \(ServerConfig.installHost)."
-        case "public": return "Download a shared pack from tetherless.dev. Same shape as the old backloop.dev/pack.json."
-        default: return "Issues a leaf for \(ServerConfig.installHost) from a root that only this phone trusts."
+        case "local": return "Issues a leaf for \(ServerConfig.installHost) from a root that only this phone trusts."
+        default: return "Auto-installed on launch from \(ServerConfig.certSourceURL) (Feather/backloop pack.json shape)."
         }
     }
 

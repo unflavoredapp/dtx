@@ -5,9 +5,9 @@
 //  for the ~90s installd needs.
 //
 //  Default host is ota.tetherless.dev (decrypt.team's backloop.dev replacement).
-//  Cert source follows ServerConfig.certMode:
-//    "local"  → on-device root CA leaf (LocalCAManager) — default, no network.
-//    "public" → pack from tetherless.dev / your cert source URL.
+//  Cert source follows ServerConfig.certMode (default "public"):
+//    "public" → pack from tetherless.dev, installed on every launch by OTABootstrap.
+//    "local"  → on-device root CA leaf (LocalCAManager).
 //    "custom" → imported PEM pair.
 //
 
@@ -95,8 +95,8 @@ final class OTAInstaller: ObservableObject {
                 throw InstallError.hostNotCovered(host: host, mode: mode, sans: sans)
             }
         } else {
-            // Near expiry: pull the freshly renewed pair from the VPS (no-op offline; cached/bundled pair still works).
-            if ZefvCert.needsRefresh { await ZefvCert.refreshIfNeeded() }
+            // Always refresh the public pack before serving (falls back to cache offline).
+            _ = await ZefvCert.installPublicPack()
             guard ZefvCert.isAvailable else { throw ZefvCert.CertError.unavailable }
             let sans = ZefvCert.effectiveSANs
             guard ZefvCert.covers(host, sans: sans) else {
