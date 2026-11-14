@@ -22,7 +22,7 @@ struct OTASettingsView: View {
         NavigationStack {
             List {
                 Section {
-                    Text("Installs signed IPAs with itms-services over https://\(ServerConfig.installHost). The public pack from tetherless.dev is installed automatically on every launch. Point `*.\(ServerConfig.certDomain)` at 127.0.0.1 (same idea as backloop.dev).")
+                    Text("Installs signed IPAs with itms-services over https://\(ServerConfig.installHost). The public pack from tetherless.dev is installed automatically on every launch. Point `*.\(ServerConfig.certDomain)` at 127.0.0.1; apex `\(ServerConfig.certDomain)` hosts the pack.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
 
@@ -141,14 +141,18 @@ struct OTASettingsView: View {
     }
 
     private var loopHint: String? {
-        "DNS: A record for \(ServerConfig.installHost) (or *.\(ServerConfig.certDomain)) → 127.0.0.1"
+        "DNS: *.\(ServerConfig.certDomain) → 127.0.0.1 (install host \(ServerConfig.installHost) is covered by the wildcard)"
     }
 
     private func saveDomain() {
         let d = domain.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         var h = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard d.contains(".") else { error = "Enter a domain like tetherless.dev"; return }
-        if h.isEmpty { h = d == ServerConfig.defaultDomain ? ServerConfig.defaultInstallHost : "ota.\(d)" }
+        if h.isEmpty || h == "ota.\(d)" || !h.hasSuffix(".\(d)") || h == d {
+            // Fresh label under the wildcard — apex stays on the VPS for pack hosting.
+            let label = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(8)).lowercased()
+            h = "\(label).\(d)"
+        }
         ServerConfig.setCertDomain(d)
         ServerConfig.setInstallHost(h)
         domain = ServerConfig.certDomain

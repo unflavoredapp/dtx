@@ -328,7 +328,7 @@ nonisolated enum OTAFiles {
         Uncrypt-OTA-Trust.mobileconfig the trust profile. Open it to install the root, then enable it in
                                        Settings › General › About › Certificate Trust Settings.
 
-        Default host: ota.tetherless.dev (point *.tetherless.dev at 127.0.0.1).
+        Default host: random label under *.tetherless.dev (point *.tetherless.dev at 127.0.0.1).
         Private keys are NOT here — they live in the Keychain (ThisDeviceOnly) and never touch disk.
         """.utf8))
         return out

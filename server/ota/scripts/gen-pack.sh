@@ -10,7 +10,6 @@ SECRETS="$ROOT/secrets"
 PUB="$ROOT/public"
 WORK="$ROOT/dist"
 DOMAIN="${OTA_DOMAIN:-tetherless.dev}"
-HOST="${OTA_HOST:-ota.${DOMAIN}}"
 DAYS_CA="${OTA_CA_DAYS:-3650}"
 DAYS_LEAF="${OTA_LEAF_DAYS:-397}"
 
@@ -47,7 +46,6 @@ subjectAltName = @alt
 [alt]
 DNS.1 = *.${DOMAIN}
 DNS.2 = ${DOMAIN}
-DNS.3 = ${HOST}
 [v3_leaf]
 basicConstraints = critical,CA:FALSE
 keyUsage = critical,digitalSignature,keyEncipherment
@@ -64,13 +62,12 @@ cat server.crt ca.crt > fullchain.pem
 cp server.key privkey.pem
 openssl verify -CAfile ca.crt server.crt
 
-export WORK PUB DOMAIN HOST
+export WORK PUB DOMAIN
 python3 <<'PY'
 import json, pathlib, subprocess, datetime, os
 work = pathlib.Path(os.environ["WORK"])
 pub = pathlib.Path(os.environ["PUB"])
 domain = os.environ["DOMAIN"]
-host = os.environ["HOST"]
 cert = (work / "fullchain.pem").read_text()
 key = (work / "privkey.pem").read_text()
 ca = (work / "ca.crt").read_text()
@@ -93,7 +90,7 @@ pack = {
     "key2": key2,
     "key": key,
     "not_after": not_after,
-    "sans": [f"*.{domain}", domain, host],
+    "sans": [f"*.{domain}", domain],
     "info": {
         "issuer": {"commonName": "Uncrypt Tetherless OTA Root"},
         "domains": {"commonName": f"*.{domain}"},

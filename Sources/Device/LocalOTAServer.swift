@@ -5,9 +5,9 @@
 //
 //  Default domain is tetherless.dev — the decrypt.team replacement for the
 //  discontinued backloop.dev loopback-HTTPS trick. Point `*.tetherless.dev`
-//  (and ideally `ota.tetherless.dev`) at 127.0.0.1. Default cert mode is the
-//  public pack from https://tetherless.dev/pack.json, which OTABootstrap
-//  installs on every launch so OTA is ready without a Settings step.
+//  at 127.0.0.1 (apex `tetherless.dev` hosts the pack on the VPS). Default
+//  cert mode is the public pack from https://tetherless.dev/pack.json, which
+//  OTABootstrap installs on every launch so OTA is ready without a Settings step.
 //
 
 import Foundation
@@ -17,21 +17,30 @@ import NIOSSL
 // MARK: - Config
 
 nonisolated enum ServerConfig {
-    /// Bring-your-own domain. Requirements: `*.<domain>` (and ideally `<domain>`) have an
-    /// A record → 127.0.0.1. Default is tetherless.dev — decrypt.team's backloop.dev stand-in.
+    /// Bring-your-own domain. Requirement: `*.<domain>` A → 127.0.0.1.
+    /// Apex stays on the VPS for pack hosting. Default: tetherless.dev.
     static let defaultDomain = "tetherless.dev"
     static var certDomain: String {
         UserDefaults.standard.string(forKey: "uzd_cert_domain") ?? defaultDomain
     }
     static func setCertDomain(_ d: String) { UserDefaults.standard.set(d, forKey: "uzd_cert_domain") }
 
-    /// SNI + manifest host. Must be under `certDomain` and covered by the cert's SANs.
-    /// Default `ota.tetherless.dev`: one label under `*.tetherless.dev`, A record → 127.0.0.1.
-    static let defaultInstallHost = "ota.tetherless.dev"
+    /// SNI + manifest host. One label under `certDomain`, covered by `*.<domain>`.
+    /// Auto-picked and persisted so only wildcard DNS is required (no fixed subdomain).
+    static var defaultInstallHost: String { autoInstallHost(for: defaultDomain) }
     static var installHost: String {
-        UserDefaults.standard.string(forKey: "uzd_install_host") ?? (certDomain == defaultDomain ? defaultInstallHost : "ota.\(certDomain)")
+        if let h = UserDefaults.standard.string(forKey: "uzd_install_host"), !h.isEmpty { return h }
+        return autoInstallHost(for: certDomain)
     }
     static func setInstallHost(_ h: String) { UserDefaults.standard.set(h, forKey: "uzd_install_host") }
+    private static func autoInstallHost(for domain: String) -> String {
+        let key = "uzd_install_host_auto_\(domain)"
+        if let h = UserDefaults.standard.string(forKey: key), !h.isEmpty, h.hasSuffix(".\(domain)") { return h }
+        let label = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(8)).lowercased()
+        let h = "\(label).\(domain)"
+        UserDefaults.standard.set(h, forKey: key)
+        return h
+    }
 
     /// Optional bundled Let's Encrypt pair (Sources/Resources):
     ///   server.crt ← fullchain.pem   server.pem ← privkey.pem

@@ -4,7 +4,7 @@
 //  iOS the itms-services URL. Keeps the server alive under a background task
 //  for the ~90s installd needs.
 //
-//  Default host is ota.tetherless.dev (decrypt.team's backloop.dev replacement).
+//  Default host is a random label under *.tetherless.dev (backloop.dev replacement).
 //  Cert source follows ServerConfig.certMode (default "public"):
 //    "public" → pack from tetherless.dev, installed on every launch by OTABootstrap.
 //    "local"  → on-device root CA leaf (LocalCAManager).

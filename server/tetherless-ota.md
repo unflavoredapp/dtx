@@ -1,15 +1,14 @@
 # tetherless.dev OTA backend
 
-Decrypt.team installs over **`ota.tetherless.dev`** using a Feather/backloop-shaped pack.
+Decrypt.team installs over a random label under **`*.tetherless.dev`** using a Feather/backloop-shaped pack. Apex **`tetherless.dev`** hosts the pack on the VPS.
 
 ## 1. DNS (Dynadot)
 
 | Name | Type | Value |
 |------|------|--------|
-| `ota` | A | `127.0.0.1` |
-| `*` (optional) | A | `127.0.0.1` |
+| `*` | A | `127.0.0.1` |
 
-Apex `tetherless.dev` stays on the VPS (`198.96.93.10`) for hosting `pack.json`.
+Apex `tetherless.dev` stays on the VPS (`198.96.93.10`) for hosting `pack.json`. No separate `ota` record — the install host is any single label covered by the wildcard.
 
 ## 2. Generate the pack
 
@@ -21,6 +20,8 @@ Writes:
 
 - `server/ota/public/pack.json` (+ `server.crt` / `server.pem` / `ca.crt` / `index.html`)
 - `server/ota/secrets/ca.key` — **keep private**, gitignored
+
+SANs are only `*.tetherless.dev` and `tetherless.dev`.
 
 This pack uses a **private CA** (not Let’s Encrypt), so it cannot be revoked the way backloop.dev was. Devices must trust the CA once (the app offers the profile on launch).
 
@@ -47,4 +48,4 @@ The app tries `https://tetherless.dev/pack.json` first, then `unflavoredapp/dtx`
 - Launch / foreground → `OTABootstrap.ensurePublicPack` pulls the pack
 - If the pack CA is not trusted → one-time trust-profile share sheet
 - User enables **Full Trust** under Settings → General → About → Certificate Trust Settings
-- OTA installs then work against `https://ota.tetherless.dev/...` on loopback
+- OTA installs then work against `https://<label>.tetherless.dev/...` on loopback
