@@ -11,6 +11,9 @@ packages:
   OpenSSL:
     url: https://github.com/HAHALOSAH/OpenSSL-Swift-Package
     branch: main
+  Vapor:
+    url: https://github.com/vapor/vapor
+    from: 4.104.0
   IDeviceKit:
     path: IDeviceKit
 settings:
@@ -42,6 +45,7 @@ targets:
     dependencies:
       - package: ZIPFoundation
       - package: OpenSSL
+      - package: Vapor
       - package: IDeviceKit
         product: IDeviceSwift
       - package: IDeviceKit

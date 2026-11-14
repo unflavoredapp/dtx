@@ -439,7 +439,7 @@ struct NativeInstallBanner: View {
     }
 }
 
-/// Hides OTA-only UI (domain / TLS cert tiles) while Native install is selected.
+/// Hides OTA-only UI (tetherless.dev domain / TLS cert tiles) while Native install is selected.
 struct HiddenWhenNative<Content: View>: View {
     @AppStorage(NativeInstaller.methodKey) private var method: String = "ota"
     @ViewBuilder var content: () -> Content

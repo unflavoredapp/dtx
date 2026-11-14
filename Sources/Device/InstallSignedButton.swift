@@ -33,11 +33,21 @@ struct InstallSignedButton: View {
     }
 
     private func start() {
-        guard NativeInstaller.isSelected else { showSetup = true; return }
+        if NativeInstaller.isSelected {
+            Task {
+                do {
+                    try await NativeInstaller.shared.install(build)
+                    ActivityStore.shared.log("Install", "installed `" + build.name + "` on this device")
+                } catch is CancellationError {
+                } catch { self.error = error.localizedDescription }
+            }
+            return
+        }
+        // Default: OTA over ota.tetherless.dev (local CA / tetherless pack).
         Task {
             do {
-                try await NativeInstaller.shared.install(build)
-                ActivityStore.shared.log("Install", "installed `" + build.name + "` on this device")
+                try await OTAInstaller.shared.install(build)
+                ActivityStore.shared.log("Install", "OTA install for `" + build.name + "`")
             } catch is CancellationError {
             } catch { self.error = error.localizedDescription }
         }
