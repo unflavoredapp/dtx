@@ -1,2 +1,75 @@
-<h1>tetherless.dev</h1>
-<p>OTA pack: <a href="/pack.json">pack.json</a></p>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>tetherless.dev</title>
+  <link rel="icon" type="image/png" href="/favicon.png" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <style>
+    :root {
+      --bg0: #1a0a3a;
+      --bg1: #1e4fd6;
+      --bg2: #3ec8ff;
+      --fg: #f4f7ff;
+      --muted: rgba(244, 247, 255, 0.72);
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      min-height: 100%;
+      font-family: "SF Pro Display", "Segoe UI", system-ui, sans-serif;
+      color: var(--fg);
+      background:
+        radial-gradient(1200px 700px at 12% 8%, #6b2bd6 0%, transparent 55%),
+        linear-gradient(135deg, var(--bg0) 0%, var(--bg1) 52%, var(--bg2) 100%);
+      display: grid;
+      place-items: center;
+      padding: 2rem;
+    }
+    main {
+      width: min(28rem, 100%);
+      text-align: center;
+    }
+    img.icon {
+      width: 7.5rem;
+      height: 7.5rem;
+      border-radius: 1.6rem;
+      box-shadow: 0 18px 40px rgba(8, 12, 40, 0.35);
+      display: block;
+      margin: 0 auto 1.25rem;
+    }
+    h1 {
+      margin: 0 0 0.4rem;
+      font-size: clamp(1.8rem, 5vw, 2.4rem);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+    }
+    p {
+      margin: 0 0 1.5rem;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+    a.cta {
+      display: inline-block;
+      padding: 0.7rem 1.15rem;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.14);
+      border: 1px solid rgba(255, 255, 255, 0.28);
+      color: var(--fg);
+      text-decoration: none;
+      font-weight: 600;
+      backdrop-filter: blur(8px);
+    }
+    a.cta:hover { background: rgba(255, 255, 255, 0.22); }
+  </style>
+</head>
+<body>
+  <main>
+    <img class="icon" src="/icon-1024.png" width="1024" height="1024" alt="tetherless.dev" />
+    <h1>tetherless.dev</h1>
+    <p>On-device OTA pack for decrypt.team. Point <code>*.tetherless.dev</code> at 127.0.0.1.</p>
+    <a class="cta" href="/pack.json">pack.json</a>
+  </main>
+</body>
+</html>

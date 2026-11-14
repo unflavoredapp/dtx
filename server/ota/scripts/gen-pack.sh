@@ -102,8 +102,10 @@ pub.mkdir(parents=True, exist_ok=True)
 (pub / "server.pem").write_text(key)
 (pub / "ca.crt").write_text(ca)
 (pub / "commonName.txt").write_text(f"*.{domain}\n")
-(pub / "index.html").write_text(
-    f"<h1>{domain}</h1>\n<p>OTA pack: <a href=\"/pack.json\">pack.json</a></p>\n"
-)
+# Keep hand-authored index.html + icon assets if present (do not clobber branding).
+if not (pub / "index.html").exists():
+    (pub / "index.html").write_text(
+        f"<h1>{domain}</h1>\n<p>OTA pack: <a href=\"/pack.json\">pack.json</a></p>\n"
+    )
 print(f"Wrote {pub / 'pack.json'} (not_after={not_after})")
 PY
