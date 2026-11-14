@@ -3,3 +3,7 @@ build/
 Payload/
 *.ipa
 .DS_Store
+
+# OTA CA private material (leaf pack is publishable; CA key is not)
+server/ota/secrets/
+server/ota/dist/

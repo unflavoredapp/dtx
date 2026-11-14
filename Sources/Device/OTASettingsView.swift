@@ -22,7 +22,7 @@ struct OTASettingsView: View {
         NavigationStack {
             List {
                 Section {
-                    Text("Installs signed IPAs with itms-services over https://\(ServerConfig.installHost). The public pack from tetherless.dev is installed automatically on every launch. Point `*.\(ServerConfig.certDomain)` at 127.0.0.1 (same idea as backloop.dev).")
+                    Text("Installs signed IPAs with itms-services over https://\(ServerConfig.installHost). The public pack from tetherless.dev is installed automatically on every launch. Point `*.\(ServerConfig.certDomain)` at 127.0.0.1; apex `\(ServerConfig.certDomain)` hosts the pack.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
 
@@ -87,11 +87,22 @@ struct OTASettingsView: View {
 
                 if mode == "public" {
                     Section("tetherless.dev pack") {
-                        Text("Fetches \(ServerConfig.certSourceURL) (Feather/backloop pack.json or cert.php JSON). Public wildcard keys get revoked — prefer Local CA unless you control issuance carefully.")
+                        Text("Auto-installed on launch from \(ServerConfig.certSourceURL) (GitHub certs branch as fallback). After the pack lands, install the CA trust profile once and enable Full Trust.")
                             .font(.footnote).foregroundStyle(.secondary)
+                        LabeledContent("Pack CA trusted") {
+                            Text(ZefvCert.isPackCATrusted() ? "Yes" : "Not yet")
+                                .foregroundStyle(ZefvCert.isPackCATrusted() ? .green : .orange)
+                        }
                         Button(working ? "Pulling…" : "Pull latest pack") {
                             Task { await pullPack() }
                         }.disabled(working)
+                        Button("Install CA trust profile") {
+                            if ZefvCert.isPackCATrusted() { note = "Pack CA already trusted."; return }
+                            if ZefvCert.writePackCATrustProfile() == nil {
+                                error = "No pack CA on disk — pull the pack first."; return
+                            }
+                            OTABootstrap.offerPackCATrustIfNeeded(force: true)
+                        }
                         if let exp = ZefvCert.effectiveNotAfter {
                             let days = Calendar.current.dateComponents([.day], from: Date(), to: exp).day ?? 0
                             Text(days < 0 ? "Pack expired" : "Pack expires in \(days)d · SANs: \(ZefvCert.effectiveSANs.joined(separator: ", "))")
@@ -130,14 +141,18 @@ struct OTASettingsView: View {
     }
 
     private var loopHint: String? {
-        "DNS: A record for \(ServerConfig.installHost) (or *.\(ServerConfig.certDomain)) → 127.0.0.1"
+        "DNS: *.\(ServerConfig.certDomain) → 127.0.0.1 (install host \(ServerConfig.installHost) is covered by the wildcard)"
     }
 
     private func saveDomain() {
         let d = domain.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         var h = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard d.contains(".") else { error = "Enter a domain like tetherless.dev"; return }
-        if h.isEmpty { h = d == ServerConfig.defaultDomain ? ServerConfig.defaultInstallHost : "ota.\(d)" }
+        if h.isEmpty || h == "ota.\(d)" || !h.hasSuffix(".\(d)") || h == d {
+            // Fresh label under the wildcard — apex stays on the VPS for pack hosting.
+            let label = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(8)).lowercased()
+            h = "\(label).\(d)"
+        }
         ServerConfig.setCertDomain(d)
         ServerConfig.setInstallHost(h)
         domain = ServerConfig.certDomain
@@ -165,7 +180,7 @@ struct OTASettingsView: View {
             ServerConfig.setCertMode("local")
             mode = "local"
             _ = try LocalCAManager.ensureRoot()
-            _ = try LocalCAManager.issueLeaf(host: h, force: true)
+            try LocalCAManager.issueLeaf(host: h)
             _ = OTAFiles.exportLocalCA()
             note = "Leaf issued for \(h). Install the trust profile, then enable it under Certificate Trust Settings."
         } catch { self.error = error.localizedDescription }

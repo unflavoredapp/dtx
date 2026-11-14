@@ -43,7 +43,7 @@ struct InstallSignedButton: View {
             }
             return
         }
-        // Default: OTA over ota.tetherless.dev (local CA / tetherless pack).
+        // Default: OTA over *.tetherless.dev (local CA / tetherless pack).
         Task {
             do {
                 try await OTAInstaller.shared.install(build)

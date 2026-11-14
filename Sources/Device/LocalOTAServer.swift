@@ -5,9 +5,9 @@
 //
 //  Default domain is tetherless.dev — the decrypt.team replacement for the
 //  discontinued backloop.dev loopback-HTTPS trick. Point `*.tetherless.dev`
-//  (and ideally `ota.tetherless.dev`) at 127.0.0.1. Default cert mode is the
-//  public pack from https://tetherless.dev/pack.json, which OTABootstrap
-//  installs on every launch so OTA is ready without a Settings step.
+//  at 127.0.0.1 (apex `tetherless.dev` hosts the pack on the VPS). Default
+//  cert mode is the public pack from https://tetherless.dev/pack.json, which
+//  OTABootstrap installs on every launch so OTA is ready without a Settings step.
 //
 
 import Foundation
@@ -17,21 +17,30 @@ import NIOSSL
 // MARK: - Config
 
 nonisolated enum ServerConfig {
-    /// Bring-your-own domain. Requirements: `*.<domain>` (and ideally `<domain>`) have an
-    /// A record → 127.0.0.1. Default is tetherless.dev — decrypt.team's backloop.dev stand-in.
+    /// Bring-your-own domain. Requirement: `*.<domain>` A → 127.0.0.1.
+    /// Apex stays on the VPS for pack hosting. Default: tetherless.dev.
     static let defaultDomain = "tetherless.dev"
     static var certDomain: String {
         UserDefaults.standard.string(forKey: "uzd_cert_domain") ?? defaultDomain
     }
     static func setCertDomain(_ d: String) { UserDefaults.standard.set(d, forKey: "uzd_cert_domain") }
 
-    /// SNI + manifest host. Must be under `certDomain` and covered by the cert's SANs.
-    /// Default `ota.tetherless.dev`: one label under `*.tetherless.dev`, A record → 127.0.0.1.
-    static let defaultInstallHost = "ota.tetherless.dev"
+    /// SNI + manifest host. One label under `certDomain`, covered by `*.<domain>`.
+    /// Auto-picked and persisted so only wildcard DNS is required (no fixed subdomain).
+    static var defaultInstallHost: String { autoInstallHost(for: defaultDomain) }
     static var installHost: String {
-        UserDefaults.standard.string(forKey: "uzd_install_host") ?? (certDomain == defaultDomain ? defaultInstallHost : "ota.\(certDomain)")
+        if let h = UserDefaults.standard.string(forKey: "uzd_install_host"), !h.isEmpty { return h }
+        return autoInstallHost(for: certDomain)
     }
     static func setInstallHost(_ h: String) { UserDefaults.standard.set(h, forKey: "uzd_install_host") }
+    private static func autoInstallHost(for domain: String) -> String {
+        let key = "uzd_install_host_auto_\(domain)"
+        if let h = UserDefaults.standard.string(forKey: key), !h.isEmpty, h.hasSuffix(".\(domain)") { return h }
+        let label = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(8)).lowercased()
+        let h = "\(label).\(domain)"
+        UserDefaults.standard.set(h, forKey: key)
+        return h
+    }
 
     /// Optional bundled Let's Encrypt pair (Sources/Resources):
     ///   server.crt ← fullchain.pem   server.pem ← privkey.pem
@@ -92,6 +101,7 @@ nonisolated enum ZefvCert {
     static var docs: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0] }
     static var cachedCrt: URL { docs.appendingPathComponent("refreshed-server.crt") }
     static var cachedKey: URL { docs.appendingPathComponent("refreshed-server.pem") }
+    static var cachedCA:  URL { docs.appendingPathComponent("refreshed-ca.crt") }
     static var metaURL: URL { docs.appendingPathComponent("refreshed-cert.json") }
 
     static var bundledCrt: URL? { Bundle.main.url(forResource: ServerConfig.certResource, withExtension: "crt") }
@@ -248,10 +258,12 @@ nonisolated enum ZefvCert {
            pack.cert.contains("BEGIN CERTIFICATE"),
            let key = pack.privateKey, key.contains("PRIVATE KEY") {
             var chain = pack.cert
-            if let ca = pack.ca, ca.contains("BEGIN CERTIFICATE"), !chain.contains(ca) {
-                chain += chain.hasSuffix("\n") ? ca : "\n" + ca
+            let caPEM = pack.ca.flatMap { $0.contains("BEGIN CERTIFICATE") ? $0 : nil }
+            if let caPEM, !chain.contains(caPEM) {
+                chain += chain.hasSuffix("\n") ? caPEM : "\n" + caPEM
             }
-            return try store(chain: Data(chain.utf8), key: Data(key.utf8), expires: pack.not_after)
+            return try store(chain: Data(chain.utf8), key: Data(key.utf8),
+                             expires: pack.not_after, caPEM: caPEM.map { Data($0.utf8) })
         }
         return try await fetchFromURL(url)
     }
@@ -320,18 +332,33 @@ nonisolated enum ZefvCert {
             return d
         }
         let packData = try await raw("pack.json")
+        if let pack = try? JSONDecoder().decode(VPSPack.self, from: packData),
+           pack.cert.contains("BEGIN CERTIFICATE"),
+           let key = pack.privateKey, key.contains("PRIVATE KEY") {
+            let caPEM = pack.ca.flatMap { $0.contains("BEGIN CERTIFICATE") ? $0 : nil }
+            return try store(chain: Data(pack.cert.utf8), key: Data(key.utf8),
+                             expires: pack.not_after, caPEM: caPEM.map { Data($0.utf8) })
+        }
         let m: Manifest
         do { m = try JSONDecoder().decode(Manifest.self, from: packData) } catch { throw CertError.badPack("unreadable pack.json") }
         guard let keyFile = m.key, !keyFile.isEmpty else { throw CertError.badPack("pack.json has no key entry") }
         let chain = try await raw(m.bundle)
         let key   = try await raw(keyFile)
-        return try store(chain: chain, key: key, expires: m.expires)
+        let ca = try? await raw("ca.crt")
+        return try store(chain: chain, key: key, expires: m.expires, caPEM: ca)
     }
 
     static func fetchFromURL(_ url: URL) async throws -> Meta {
         var req = URLRequest(url: url); req.cachePolicy = .reloadIgnoringLocalCacheData
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard (resp as? HTTPURLResponse)?.statusCode ?? 0 < 400 else { throw CertError.badPack("HTTP \((resp as? HTTPURLResponse)?.statusCode ?? 0)") }
+        if let pack = try? JSONDecoder().decode(VPSPack.self, from: data),
+           pack.cert.contains("BEGIN CERTIFICATE"),
+           let key = pack.privateKey, key.contains("PRIVATE KEY") {
+            let caPEM = pack.ca.flatMap { $0.contains("BEGIN CERTIFICATE") ? $0 : nil }
+            return try store(chain: Data(pack.cert.utf8), key: Data(key.utf8),
+                             expires: pack.not_after, caPEM: caPEM.map { Data($0.utf8) })
+        }
         let m: Manifest
         do { m = try JSONDecoder().decode(Manifest.self, from: data) } catch { throw CertError.badPack("unreadable pack.json") }
         guard let keyFile = m.key, !keyFile.isEmpty else { throw CertError.badPack("pack.json has no key entry") }
@@ -342,18 +369,21 @@ nonisolated enum ZefvCert {
             guard (r as? HTTPURLResponse)?.statusCode ?? 0 < 400, !d.isEmpty else { throw CertError.badPack("couldn't download \(name)") }
             return d
         }
-        return try store(chain: try await get(m.bundle), key: try await get(keyFile), expires: m.expires)
+        let ca = try? await get("ca.crt")
+        return try store(chain: try await get(m.bundle), key: try await get(keyFile), expires: m.expires, caPEM: ca)
     }
 
     /// Validate (NIOSSL must parse both, key must match the leaf's SAN set) then cache.
-    private static func store(chain: Data, key: Data, expires: String?) throws -> Meta {
+    private static func store(chain: Data, key: Data, expires: String?, caPEM: Data? = nil) throws -> Meta {
         _ = try NIOSSLCertificate.fromPEMBytes(Array(chain))
         _ = try NIOSSLPrivateKey(bytes: Array(key), format: .pem)
         try chain.write(to: cachedCrt, options: .atomic)
         try key.write(to: cachedKey, options: .atomic)
+        if let caPEM { try caPEM.write(to: cachedCA, options: .atomic) }
         // Feather-compatible names in Documents (some install paths / debugging expect these).
         try? chain.write(to: docs.appendingPathComponent("server.crt"), options: .atomic)
         try? key.write(to: docs.appendingPathComponent("server.pem"), options: .atomic)
+        if let caPEM { try? caPEM.write(to: docs.appendingPathComponent("ca.crt"), options: .atomic) }
         let sans = sans(fromPEM: chain)
         let cn = sans.first(where: { $0.hasPrefix("*.") }) ?? sans.first ?? ServerConfig.installHost
         try? cn.write(to: docs.appendingPathComponent("commonName.txt"), atomically: true, encoding: .utf8)
@@ -371,13 +401,74 @@ nonisolated enum ZefvCert {
     }
 
     /// Always pull the public pack (ignores the near-expiry buffer). Used on launch.
+    /// Tries tetherless.dev first, then the GitHub `certs` branch as fallback.
     @discardableResult
     static func installPublicPack(token: String? = nil) async -> Meta? {
-        try? await fetch(token: token)
+        if let meta = try? await fetch(token: token) { return meta }
+        return try? await fetchFromGitHub(token: token)
     }
 
     static func clearCache() {
-        for u in [cachedCrt, cachedKey, metaURL] { try? FileManager.default.removeItem(at: u) }
+        for u in [cachedCrt, cachedKey, cachedCA, metaURL] { try? FileManager.default.removeItem(at: u) }
+    }
+
+    /// True when the pack's CA is present in the system trust store (Full Trust enabled).
+    static func isPackCATrusted() -> Bool {
+        guard let pem = try? String(contentsOf: cachedCA),
+              let der = pemToDER(pem) else { return false }
+        guard let cert = SecCertificateCreateWithData(nil, der as CFData) else { return false }
+        var trust: SecTrust?
+        guard SecTrustCreateWithCertificates(cert, SecPolicyCreateBasicX509(), &trust) == errSecSuccess,
+              let trust else { return false }
+        var err: CFError?
+        return SecTrustEvaluateWithError(trust, &err)
+    }
+
+    /// Writes a .mobileconfig that installs the pack CA as a trusted root.
+    static func writePackCATrustProfile() -> URL? {
+        guard let pem = try? String(contentsOf: cachedCA),
+              let der = pemToDER(pem) else { return nil }
+        let payloadUUID = UUID().uuidString
+        let profileUUID = UUID().uuidString
+        let certB64 = der.base64EncodedString()
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+          <key>PayloadContent</key>
+          <array>
+            <dict>
+              <key>PayloadType</key><string>com.apple.security.root</string>
+              <key>PayloadVersion</key><integer>1</integer>
+              <key>PayloadIdentifier</key><string>team.decrypt.tetherless.packca.\(payloadUUID)</string>
+              <key>PayloadUUID</key><string>\(payloadUUID)</string>
+              <key>PayloadDisplayName</key><string>Uncrypt Tetherless OTA Root</string>
+              <key>PayloadContent</key>
+              <data>\(certB64)</data>
+            </dict>
+          </array>
+          <key>PayloadType</key><string>Configuration</string>
+          <key>PayloadVersion</key><integer>1</integer>
+          <key>PayloadIdentifier</key><string>team.decrypt.tetherless.packca.profile.\(profileUUID)</string>
+          <key>PayloadUUID</key><string>\(profileUUID)</string>
+          <key>PayloadDisplayName</key><string>Uncrypt OTA Trust (tetherless.dev)</string>
+          <key>PayloadDescription</key><string>Trusts the tetherless.dev OTA certificate authority so on-device installs work. After installing, enable Full Trust in Settings › General › About › Certificate Trust Settings.</string>
+          <key>PayloadRemovalDisallowed</key><false/>
+        </dict>
+        </plist>
+        """
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Uncrypt-Tetherless-OTA-Trust.mobileconfig")
+        guard let data = xml.data(using: .utf8) else { return nil }
+        try? data.write(to: url)
+        return url
+    }
+
+    private static func pemToDER(_ pem: String) -> Data? {
+        guard let a = pem.range(of: "-----BEGIN CERTIFICATE-----"),
+              let b = pem.range(of: "-----END CERTIFICATE-----") else { return nil }
+        let b64 = pem[a.upperBound..<b.lowerBound].components(separatedBy: .whitespacesAndNewlines).joined()
+        return Data(base64Encoded: b64)
     }
 
     // MARK: notAfter from the leaf cert (minimal DER walk)
@@ -461,8 +552,18 @@ extension ZefvCert {
     }
 }
 
-// MARK: - One-tap link-up (phone only: sign in to GitHub, link a repo, done)
+// MARK: - Certs-branch helpers (GitHub fallback for the public pack)
 
+nonisolated enum CertGitError: LocalizedError {
+    case badConfig(String)
+    var errorDescription: String? {
+        switch self { case .badConfig(let m): return m }
+    }
+}
+
+/// Ensures the optional GitHub `certs` fallback branch exists. The public
+/// tetherless.dev pack is the primary path; this does not install a certbot
+/// Actions pipeline (private CA pack is published by `server/ota/scripts`).
 nonisolated enum CertSourceLinker {
     struct Report: Sendable {
         var repoOK = false
@@ -470,6 +571,8 @@ nonisolated enum CertSourceLinker {
         var branchCreated = false
         var notes: [String] = []
     }
+
+    private static let certsBranch = "certs"
 
     private static func gh(_ path: String, token: String, method: String = "GET", body: [String: Any]? = nil,
                            accept: String = "application/vnd.github+json") async throws -> (Int, [String: Any]) {
@@ -487,58 +590,39 @@ nonisolated enum CertSourceLinker {
         return (code, obj)
     }
 
-    /// 1) verify the token sees the repo, 2) install certs.yml + hooks on the default branch
-    ///    if they're missing, 3) create the orphan `certs` branch (README + empty challenge board).
+    /// Verify the token can see the repo, then create an orphan `certs` branch
+    /// (README + empty challenge board) if it is missing.
     static func link(owner: String, repo: String, token: String, forceUpdate: Bool = false) async throws -> Report {
-        guard !token.isEmpty else { throw GitHubError.badConfig("Add a GitHub token in Settings › Access token first.") }
+        _ = forceUpdate
+        guard !token.isEmpty else { throw CertGitError.badConfig("Add a GitHub token in Settings › Access token first.") }
         var rep = Report()
         let base = "/repos/\(owner)/\(repo)"
 
-        let (rc, rj) = try await gh(base, token: token)
-        guard rc == 200 else { throw GitHubError.badConfig("Can't see \(owner)/\(repo) (HTTP \(rc)). Check the repo name and that the token has Contents + Actions + Workflows: Read and write on it.") }
+        let (rc, _) = try await gh(base, token: token)
+        guard rc == 200 else {
+            throw CertGitError.badConfig("Can't see \(owner)/\(repo) (HTTP \(rc)). Check the repo name and that the token can read it.")
+        }
         rep.repoOK = true
-        let defaultBranch = rj["default_branch"] as? String ?? "main"
+        rep.notes.append("Publish pack.json via server/ota (or the publish-ota-pack workflow); no in-app Actions pipeline.")
 
-        // 2) pipeline files — push only what's missing (the app's own push engine).
-        // forceUpdate: push every pipeline file regardless — replaces a stale
-        // certs.yml/hook on main with the app's embedded copy.
-        var missing: [(path: String, data: Data)] = []
-        for f in CertPipeline.files {
-            if forceUpdate { missing.append(f); continue }
-            let (c, _) = try await gh("\(base)/contents/\(f.path)?ref=\(defaultBranch)", token: token)
-            if c == 404 { missing.append(f) }
-        }
-        if !missing.isEmpty {
-            let client = GitHubClient(owner: owner, repo: repo, branch: defaultBranch, token: token)
-            do {
-                _ = try await client.push(files: missing, subpath: "", message: forceUpdate ? "Update OTA cert pipeline (certbot via Actions)" : "Add OTA cert pipeline (certbot via Actions)", progress: { _, _ in })
-                rep.installedFiles = missing.map(\.path)
-            } catch {
-                throw GitHubError.badConfig("Installing the workflow failed: \(error.localizedDescription) — the token needs Workflows: Read and write to add .github/workflows files.")
-            }
-        } else {
-            rep.notes.append("Pipeline already installed on \(defaultBranch).")
-        }
-
-        // 3) certs branch (orphan commit via the Git Data API).
-        let (bc, _) = try await gh("\(base)/branches/\(CertPipeline.branch)", token: token)
+        let (bc, _) = try await gh("\(base)/branches/\(certsBranch)", token: token)
         if bc == 404 {
             func blob(_ text: String) async throws -> String {
                 let (c, j) = try await gh("\(base)/git/blobs", token: token, method: "POST", body: ["content": text, "encoding": "utf-8"])
-                guard c == 201, let sha = j["sha"] as? String else { throw GitHubError.badConfig("blob failed (\(c))") }
+                guard c == 201, let sha = j["sha"] as? String else { throw CertGitError.badConfig("blob failed (\(c))") }
                 return sha
             }
-            let readme = try await blob("# OTA certs\n\nPublished by `.github/workflows/certs.yml`: server.crt (fullchain), server.pem (key), pack.json, challenge.json.\n")
-            let board  = try await blob("{\"records\":[],\"updatedAt\":\"\",\"instructions\":\"Linked. Tap Renew now in the app to issue your first cert.\"}\n")
+            let readme = try await blob("# OTA certs\n\nFallback pack for decrypt.team: server.crt, server.pem, pack.json (private CA for *.tetherless.dev).\n")
+            let board  = try await blob("{\"records\":[],\"updatedAt\":\"\",\"instructions\":\"Certs branch ready. Publish the pack from server/ota.\"}\n")
             let (tc, tj) = try await gh("\(base)/git/trees", token: token, method: "POST", body: ["tree": [
                 ["path": "README.md",      "mode": "100644", "type": "blob", "sha": readme],
                 ["path": "challenge.json", "mode": "100644", "type": "blob", "sha": board],
             ]])
-            guard tc == 201, let tree = tj["sha"] as? String else { throw GitHubError.badConfig("tree failed (\(tc))") }
+            guard tc == 201, let tree = tj["sha"] as? String else { throw CertGitError.badConfig("tree failed (\(tc))") }
             let (cc, cj) = try await gh("\(base)/git/commits", token: token, method: "POST", body: ["message": "init certs branch", "tree": tree, "parents": []])
-            guard cc == 201, let commit = cj["sha"] as? String else { throw GitHubError.badConfig("commit failed (\(cc))") }
-            let (refc, _) = try await gh("\(base)/git/refs", token: token, method: "POST", body: ["ref": "refs/heads/\(CertPipeline.branch)", "sha": commit])
-            guard refc == 201 else { throw GitHubError.badConfig("creating branch failed (\(refc))") }
+            guard cc == 201, let commit = cj["sha"] as? String else { throw CertGitError.badConfig("commit failed (\(cc))") }
+            let (refc, _) = try await gh("\(base)/git/refs", token: token, method: "POST", body: ["ref": "refs/heads/\(certsBranch)", "sha": commit])
+            guard refc == 201 else { throw CertGitError.badConfig("creating branch failed (\(refc))") }
             rep.branchCreated = true
         } else {
             rep.notes.append("certs branch already exists.")
@@ -596,7 +680,7 @@ extension ZefvCert {
     /// Flip "force": true on a pending record in challenge.json (certs branch). The hook
     /// pulls the file every poll and proceeds to validation as soon as it sees it.
     static func forceChallenge(value: String, token: String) async throws {
-        guard !token.isEmpty else { throw GitHubError.badConfig("GitHub token required.") }
+        guard !token.isEmpty else { throw CertGitError.badConfig("GitHub token required.") }
         let o = ServerConfig.certRepoOwner, r = ServerConfig.certRepoName, b = ServerConfig.certBranch
         let url = URL(string: "https://api.github.com/repos/\(o)/\(r)/contents/challenge.json?ref=\(b)")!
         var req = URLRequest(url: url); req.cachePolicy = .reloadIgnoringLocalCacheData
@@ -611,12 +695,12 @@ extension ZefvCert {
               let b64 = (meta["content"] as? String)?.replacingOccurrences(of: "\n", with: ""),
               let raw = Data(base64Encoded: b64),
               var doc = try? JSONSerialization.jsonObject(with: raw) as? [String: Any] else {
-            throw GitHubError.badConfig("Couldn't read challenge.json on \(b).")
+            throw CertGitError.badConfig("Couldn't read challenge.json on \(b).")
         }
         var recs = doc["records"] as? [[String: Any]] ?? []
         var hit = false
         for i in recs.indices where (recs[i]["value"] as? String) == value { recs[i]["force"] = true; hit = true }
-        guard hit else { throw GitHubError.badConfig("That challenge is no longer on the board.") }
+        guard hit else { throw CertGitError.badConfig("That challenge is no longer on the board.") }
         doc["records"] = recs
         doc["updatedAt"] = ISO8601DateFormatter().string(from: Date())
         let newData = try JSONSerialization.data(withJSONObject: doc, options: [.prettyPrinted, .sortedKeys])
@@ -633,7 +717,7 @@ extension ZefvCert {
         ])
         let (_, pr) = try await URLSession.shared.data(for: put)
         guard (200...299).contains((pr as? HTTPURLResponse)?.statusCode ?? 0) else {
-            throw GitHubError.badConfig("Couldn't update challenge.json (HTTP \((pr as? HTTPURLResponse)?.statusCode ?? 0)).")
+            throw CertGitError.badConfig("Couldn't update challenge.json (HTTP \((pr as? HTTPURLResponse)?.statusCode ?? 0)).")
         }
     }
 
